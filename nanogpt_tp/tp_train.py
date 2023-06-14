@@ -25,7 +25,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import config.config_2D as fsdp_config
+import config.nanogpt_2D as fsdp_config
 from model import GPT, GPTConfig
 
 cfg = fsdp_config.train_config()
