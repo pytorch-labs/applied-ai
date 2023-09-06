@@ -65,21 +65,24 @@ class AlibiPositionEmbeddings(nn.Module):
         """returns the alibi mask, clipped to the current batch seq len"""
         return self.alibi_mask[:, :curr_seq_len, :curr_seq_len]
 
-    def build_causal_attention_mask(self, seq_len: int, num_heads: int) -> torch.Tensor:
+    @classmethod
+    def build_causal_attention_mask(cls, seq_len: int, num_heads: int) -> torch.Tensor:
         """builds a generic causal attention mask"""
         causal_mask = torch.ones(seq_len, seq_len).tril()
         causal_mask = causal_mask.masked_fill(causal_mask == 0, -float("inf"))
         attn_mask = causal_mask.repeat(num_heads, 1, 1)
         return attn_mask
 
-    def build_alibi_mask(self, seq_len: int, num_heads: int) -> torch.Tensor:
+    @classmethod
+    def build_alibi_mask(cls, seq_len: int, num_heads: int) -> torch.Tensor:
         """generate the alibi mask by computing a distance matrix multiplied by each head's m (slope)"""
         distance_matrix = torch.arange(seq_len) - torch.arange(seq_len).view(-1, 1)
-        slope_per_head = Tensor(self.get_slopes(num_heads)).view(-1, 1, 1)
+        slope_per_head = Tensor(cls.get_slopes(num_heads)).view(-1, 1, 1)
         alibi_mask = distance_matrix * slope_per_head
         return alibi_mask
 
-    def get_slopes(self, num_heads: int) -> List[float]:
+    @classmethod
+    def get_slopes(cls, num_heads: int) -> List[float]:
         """for n heads, a range from (0,1) and is the geometric sequence
         that starts at 2^(-8/n) and uses this same value as its ratio
 
