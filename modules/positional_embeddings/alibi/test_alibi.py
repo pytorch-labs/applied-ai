@@ -49,7 +49,6 @@ class TestAlibiPositionEmbedding:
 
     def test_alibi_mask(
         self,
-        data,
         max_seq_len,
         num_heads,
     ):
