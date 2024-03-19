@@ -12,5 +12,5 @@ Newest additions:
 
 2 - Triton - Fused Softmax for both training and inference. 
 
-<img width="790" alt="fused_softmax_a100" src="https://github.com/lessw2020/applied-ai/assets/46302957/4f2daefc-0ea3-4ee6-b9fe-181382fb518b">
+<img width="556" alt="fused_softmax_a100" src="https://github.com/lessw2020/applied-ai/assets/46302957/4f2daefc-0ea3-4ee6-b9fe-181382fb518b">
 
