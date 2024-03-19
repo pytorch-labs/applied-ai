@@ -3,7 +3,7 @@ Housing a variety of Triton and CUDA kernels for training and inference.</br>
 Inference kernels = no backward pass support.</br>
 
 <b>Newest additions:</b></br>
-1 - Triton - MoE (Mixtral) GEMM for accelerating inference. Uses col major weight layout to increase locality. 
+1 - Triton - MoE (Mixtral) GEMM for accelerating inference. Uses col major access pattern to increase locality. 
 
 <img width="556" alt="Screenshot 2024-03-18 at 5 10 58 PM" src="https://github.com/lessw2020/applied-ai/assets/46302957/7edffa8c-601e-485c-bbc8-64b734ee8ced">
 
