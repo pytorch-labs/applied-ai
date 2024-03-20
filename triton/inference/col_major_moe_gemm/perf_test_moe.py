@@ -81,7 +81,7 @@ if __name__ == '__main__':
         # Possible values for `line_arg`
         line_vals=['cm', 'gl'],
         # Label name for the lines
-        line_names=["Optimized Fused MoE GEMM Kernel", "vLLM Fused MoE GEMM Kernel"],
+        line_names=["Fused MoE GEMM Kernel - Column Major", "vLLM MoE GEMM Kernel"],
 
         # Line styles
         styles=[('blue', '-'), ('green', '-')],
