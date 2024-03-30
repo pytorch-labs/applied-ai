@@ -1,5 +1,5 @@
 ### Applied AI repo
-For experiments and research on applied AI.
+For experiments and research on Applied AI.
 
 ### Projects
 
