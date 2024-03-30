@@ -1,5 +1,8 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 
 # ---- Fused Softmax written in Triton ------
 # Extra Credits:
@@ -51,9 +54,9 @@ def _softmax_kernel_fwd(
 
 @triton.jit
 def _softmax_kernel_bwd(
-    output_ptr, 
+    output_ptr,
     stride_output_row,
-    grad_ptr, 
+    grad_ptr,
     stride_grad_row,
     input_ptr,
     stride_input_row,
@@ -114,7 +117,7 @@ class triton_softmax(autograd.Function):
         if x.requires_grad:
             ctx.save_for_backward(res)
         return res.view(*orig_shape)
-    
+
     @staticmethod
     def backward(ctx, grad_probs):
         orig_shape = grad_probs.shape
@@ -159,4 +162,3 @@ if __name__ == '__main__':
     bwd_triton = res_triton.backward(dout)
 
     torch.testing.assert_close(bwd_triton, bwd_torch, rtol=0, atol=1e-4)
-
