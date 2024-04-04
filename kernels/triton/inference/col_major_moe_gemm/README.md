@@ -1,11 +1,19 @@
+
+**MoE (Mixture of Experts) GEMM Kernels**
+
+
 Triton kernel supporting and accelerating MoE inference (Mixtral).
 This kernel was contributed by IBM Research.
 
-This kernel showcases moving the weights into col-major format to accelerate inference.
+This kernel showcases the following optimizations:
+
+* Column-Major Launch Schedule (L2 Cache Optimization)
+* SplitK Work Decomposition (Parallel Work Srategy Optimization)
+
 See blog post: (link pending)
 
-v0 = grouped MM
-v1 = SplitK MM
-v2 = Col Major MM
+* v0 = grouped MM
+* v1 = SplitK MM
+* v2 = Col Major MM
 
 This requires vLLM to be installed to run.
