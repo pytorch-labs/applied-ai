@@ -8,7 +8,7 @@ This kernel was contributed by IBM Research.
 This kernel showcases the following optimizations:
 
 * Column-Major Launch Schedule (L2 Cache Optimization)
-* SplitK Work Decomposition (Parallel Work Srategy Optimization)
+* SplitK Work Decomposition (Parallel Work Strategy Optimization)
 
 See blog post: (link pending)
 
