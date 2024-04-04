@@ -10,7 +10,8 @@ This kernel showcases the following optimizations:
 * Column-Major Launch Schedule (L2 Cache Optimization)
 * SplitK Work Decomposition (Parallel Work Strategy Optimization)
 
-See blog post: (link pending)
+See blog post: https://pytorch.org/blog/accelerating-moe-model/
+
 
 * v0 = grouped MM
 * v1 = SplitK MM
