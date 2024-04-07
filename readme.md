@@ -22,6 +22,7 @@ Inference kernels = no backward pass support.
 <img width="556" alt="softmax_fused" src="https://github.com/pytorch-labs/applied-ai/assets/46302957/de11686b-4c17-4696-857a-4f56488d6df3">
 
 #### 3 - Triton - Fused RMSNorm for both training and inference. 
+[Fused RMSNorm Kernel](https://github.com/pytorch-labs/applied-ai/blob/main/kernels/triton/training/rms_norm/fused_rms_norm.py)
 
 #### Other projects from Applied AI
 
