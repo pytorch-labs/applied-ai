@@ -15,7 +15,7 @@ import json
 import os
 
 @triton.jit()
-def swizzle_tile(pid,
+def grouped_launch(pid,
                 m, n,
                 block_m: tl.constexpr, block_n: tl.constexpr, group_m: tl.constexpr):
 
@@ -31,35 +31,6 @@ def swizzle_tile(pid,
 
     return pid_m, pid_n
 
-
-@triton.jit()
-def row_major(pid,
-                m, n, num_tokens_post_padded,
-                block_m: tl.constexpr, block_n: tl.constexpr):
-
-    grid_n = tl.cdiv(n, block_n)
-
-    pid_m_max = (num_tokens_post_padded // block_m) * 2
-
-    pid_m = (pid // grid_n) % pid_m_max
-    pid_n = pid % grid_n
-
-    return pid_m, pid_n
-
-@triton.jit()
-def col_major(pid,
-              m, n, num_tokens_post_padded,
-              block_m: tl.constexpr, block_n: tl.constexpr):
-
-    grid_m = tl.cdiv(m, block_m)
-    grid_n = tl.cdiv(n, block_n)
-
-    pid_m_max = (num_tokens_post_padded // block_m) * 2
-
-    pid_m = (pid % grid_n) % pid_m_max
-    pid_n = pid // grid_m
-
-    return pid_m, pid_n
 
 @triton.jit()
 def fused_moe_kernel_splitk(
@@ -124,17 +95,11 @@ def fused_moe_kernel_splitk(
 
     # print("num_tokens_post_padded: ", num_tokens_post_padded)
 
-    pid_m, pid_n = col_major(pid,
-                             EM, N, num_tokens_post_padded,
-                             block_m, block_n)
-
-    # pid_m, pid_n = swizzle_tile(pid,
-    #                             EM, N,
-    #                             block_m, block_n, group_m)
+    pid_m, pid_n = grouped_launch(pid,
+                                EM, N,
+                                block_m, block_n, group_m)
 
     total_blocks_k = tl.cdiv(K, block_k*split_k)
-
-    # num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
 
     if pid_m * block_m >= num_tokens_post_padded:
         return
