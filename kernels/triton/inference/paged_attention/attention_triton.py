@@ -3,6 +3,9 @@ import torch
 import triton
 import triton.language as tl
 
+# Credit:
+# vedantroy https://github.com/openai/triton/issues/2200#issuecomment-1815471999
+
 # Expect block table to map
 # logical bid (block id) -> (physical bid, # filled)
 # In tests, it maps: logical pid -> physical bid

@@ -4,6 +4,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# Credit:
+# Woosuk vLLM: https://github.com/vllm-project/vllm/blob/3d925165f2b18379640a63fbb42de95440d63b64/vllm/model_executor/layers/fused_moe/fused_moe.py
+
 """Fused MoE kernel."""
 import torch
 import triton
