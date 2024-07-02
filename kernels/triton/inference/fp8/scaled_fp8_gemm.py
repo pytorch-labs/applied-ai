@@ -79,7 +79,7 @@ def scaled_gemm_splitk(a_ptr, b_ptr, c_ptr,
         a_ptrs += block_k * split_k * stride_ak
         b_ptrs += block_k * split_k * stride_bk
     
-    #Scaled in SRAM before write back to DRAM
+    # Scaled in SRAM before write back to DRAM
     acc = scale_a * scale_b * acc
     acc.to(tl.float16)
 
