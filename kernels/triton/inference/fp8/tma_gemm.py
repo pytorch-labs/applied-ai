@@ -32,7 +32,7 @@ def gemm_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 def matmul(a, b, config=None):
 
     m, _ = a.shape
-    k, n = b.shape
+    n, k = b.shape
 
     if config:
         block_m = config["block_m"]
@@ -96,4 +96,4 @@ if __name__ == '__main__':
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
     b = b.T.contiguous()
 
-    triton = matmul(a, b)
+    c = matmul(a, b)
