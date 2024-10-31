@@ -256,9 +256,18 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
                             // store[rowidx * 128 + colidx] = data;
                             b32 data = store[rowidx * 128 + colidx];
 
+                            // compiler generates excessive instructions, so we manually do the if statement
                             #pragma unroll
                             for (int i = 0; i < num_chunks; i++) {
-                                if (real_chunk_num == i) b_frag_all[i][j] = data;
+                                asm volatile (
+                                    "{\n\t"
+                                    "  .reg .pred p0;\n\t"
+                                    "  setp.eq.u32 p0, %1, %2;\n\t"
+                                    "  @p0 mov.b32 %0, %3;\n\t"
+                                    "}\n\t"
+                                    : "+r"(b_frag_all[i][j]) // Output operand %0
+                                    : "r"(real_chunk_num), "r"(i), "r"(data) // Input operands %1, %2, %3
+                                );
                             }
                         }
                     }
@@ -604,11 +613,14 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
 
         __syncthreads();
         store = ((b32*) out) + (blockid / warps_per_block) * (num_chunks * warps_per_block) * 128;
+        int4* store4 = (int4*) store;
+        int4* bfrag_arr4 = (int4*) bfrag_arr;
         // flush smem, simply linearly write to store
+        // always divisible by 128*32b, so (32*4)*32b is ok
         #pragma unroll
-        for (int warp_off = 0; warp_off < (num_chunks * warps_per_block * 128); warp_off += 32 * warps_per_block) {
+        for (int warp_off = 0; warp_off < (num_chunks * warps_per_block * 128 / 4); warp_off += 32 * warps_per_block) {
             int total_off = warp_off + threadid + (blockid % warps_per_block) * 32;
-            store[total_off] = bfrag_arr[total_off];
+            store4[total_off] = bfrag_arr4[total_off];
         }
     }
 
