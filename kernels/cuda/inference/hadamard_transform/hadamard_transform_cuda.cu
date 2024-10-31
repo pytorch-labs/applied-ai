@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <stdint.h>
 #include <cuda_runtime.h>
 #include <mma.h>
@@ -73,15 +72,17 @@ __device__ __forceinline__ void matrix_transpose_m8_n8_fp16_inplace(b32& a0) {
 #define n_p(i) ((fp16_1n[i] & 0x0000FFFF) | fp16_1p[i] << 16)
 #define n_n(i) ((fp16_1n[i] & 0x0000FFFF) | fp16_1n[i] << 16)
 
-template<int num_chunks, int warps_per_block, int log_had_size, int blocks_per_sm>
+template<int num_chunks, int warps_per_block, int log_had_size, int blocks_per_sm, bool enable_mask>
 __global__ void __launch_bounds__(32 * warps_per_block, blocks_per_sm)
 // a is column major, b is row major
-hadamard_transform_kernel(half* a, half* out) {
+hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
     b32 b_frag_all[num_chunks][4]; // for all chunks, holds matrix fragment (which takes 4 regs of fp16x2 * 32 threads)
 
     uint blockid = blockIdx.x * warps_per_block + threadIdx.x / 32;
     uint threadid = threadIdx.x % 32;
     extern __shared__ b32 bfrag_arr[]; // num_chunks * warps_per_block * 128
+    int real_num_chunks = ((blockid + 1) * num_chunks) > total_num_chunks ? (total_num_chunks - (blockid * num_chunks)) : num_chunks;
+    int diff_num_chunks = real_num_chunks - num_chunks;
 
     b32* a_start_ptr = (b32*) (a + blockid * num_chunks * 256); // offset a to where this warp starts
     b32* out_start_ptr = (b32*) (out + blockid * num_chunks * 256);
@@ -95,6 +96,10 @@ hadamard_transform_kernel(half* a, half* out) {
     );
     #pragma unroll
     for (int k = 0; k < num_chunks; k++) {
+        if constexpr(enable_mask) {
+            if (k >= real_num_chunks)
+                break;
+        }
         size_t shared_ptr = __cvta_generic_to_shared(b_frag_ptr);
         asm volatile(
             "cp.async.cg.shared.global.L2::cache_hint.L2::256B [%0], [%1], 16, %2;\n"
@@ -274,43 +279,84 @@ hadamard_transform_kernel(half* a, half* out) {
 
         #pragma unroll
         for (int k = 0; k < num_chunks; k++) {
+            if constexpr(enable_mask) {
+                if (k >= real_num_chunks)
+                    break;
+            }
             if (l == 0) {
                 // bad fix for k not being recognized as a constexpr by compiler
                 // asm("cp.async.wait_group %0;\n" :: "n"(num_chunks - k - 1));
-                switch(k) {
-                    #define SWITCH_WAIT_ASYNC_LOAD_GROUP(i) case i: asm volatile("cp.async.wait_group %0;\n" :: "n"(num_chunks - i - 1)); break;
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(0)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(1)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(2)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(3)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(4)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(5)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(6)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(7)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(8)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(9)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(10)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(11)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(12)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(13)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(14)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(15)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(16)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(17)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(18)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(19)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(20)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(21)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(22)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(23)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(24)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(25)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(26)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(27)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(28)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(29)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(30)
-                    SWITCH_WAIT_ASYNC_LOAD_GROUP(31)
+                #define SWITCH_WAIT_ASYNC_LOAD_GROUP(i) case i: asm volatile("cp.async.wait_group %0;\n" :: "n"(num_chunks - i - 1)); break;
+                if constexpr(enable_mask) {
+                    switch(k + diff_num_chunks) {
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(0)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(1)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(2)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(3)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(4)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(5)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(6)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(7)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(8)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(9)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(10)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(11)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(12)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(13)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(14)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(15)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(16)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(17)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(18)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(19)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(20)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(21)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(22)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(23)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(24)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(25)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(26)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(27)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(28)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(29)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(30)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(31)
+                    }
+                } else {
+                    switch(k) {
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(0)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(1)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(2)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(3)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(4)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(5)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(6)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(7)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(8)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(9)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(10)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(11)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(12)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(13)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(14)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(15)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(16)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(17)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(18)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(19)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(20)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(21)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(22)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(23)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(24)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(25)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(26)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(27)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(28)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(29)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(30)
+                        SWITCH_WAIT_ASYNC_LOAD_GROUP(31)
+                    }
                 }
             }
 
@@ -568,22 +614,40 @@ hadamard_transform_kernel(half* a, half* out) {
 
 }
 
+constexpr int ceil_div(int a, int b) {
+    return (a + b - 1) / b;
+}
 
-template <int chunks_per_warp, int warps_per_block, int log_had_size, int blocks_per_sm>
+template <int chunks_per_warp, int warps_per_block, int log_had_size, int blocks_per_sm, bool check_masking = false>
 void __forceinline__ run_kernel(half* a_mat, half* out, int num_chunks, cudaStream_t stream) {
     int shared_size = chunks_per_warp * warps_per_block * 128 * 4;
-    dim3 grid_size = num_chunks / chunks_per_warp / warps_per_block;
     dim3 block_size = 32 * warps_per_block;
-    if (shared_size > 48 * 1024) {
-        constexpr auto func_ptr = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm>;
-        C10_CUDA_CHECK(cudaFuncSetAttribute(func_ptr, cudaFuncAttributeMaxDynamicSharedMemorySize, 65536));
-    }
 
-    // if (num_chunks % (chunks_per_warp * warps_per_block) != 0) {
-    //     pybind11::print("chunks not divisible by chunks per block");
-    //     return;
-    // }
-    hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm><<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out);
+    #define CHECK_SHARED_LIM() {                                                                              \
+        if (shared_size > 48 * 1024) {                                                                        \    
+            C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, 65536)); \
+        }                                                                                                     \
+    }                                                                                                         \
+
+    if constexpr(check_masking) {
+        if (num_chunks % (chunks_per_warp * warps_per_block) != 0) {
+            dim3 grid_size = ceil_div(ceil_div(num_chunks, chunks_per_warp), warps_per_block);
+            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, true>;
+            CHECK_SHARED_LIM();
+            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+        } else {
+            dim3 grid_size = num_chunks / chunks_per_warp / warps_per_block;
+            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false>;
+            CHECK_SHARED_LIM();
+            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+        }
+    } else {
+        dim3 grid_size = num_chunks / chunks_per_warp / warps_per_block;
+        auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false>;
+        CHECK_SHARED_LIM();
+        kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+    }
+    
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -611,14 +675,14 @@ void run_fht(void* a_mat, void* out, uint32_t numel, uint32_t had_size, cudaStre
         }
     } else {
         switch (had_size) {
-            case (1<<1):  run_kernel<chunks_per_warp_large, warps_per_block_large, 1, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<2):  run_kernel<chunks_per_warp_large, warps_per_block_large, 2, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<3):  run_kernel<chunks_per_warp_large, warps_per_block_large, 3, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<4):  run_kernel<chunks_per_warp_large, warps_per_block_large, 4, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<5):  run_kernel<chunks_per_warp_large, warps_per_block_large, 5, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<6):  run_kernel<chunks_per_warp_large, warps_per_block_large, 6, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<7):  run_kernel<chunks_per_warp_large, warps_per_block_large, 7, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<8):  run_kernel<chunks_per_warp_large, warps_per_block_large, 8, blocks_per_sm_large>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<1):  run_kernel<chunks_per_warp_large, warps_per_block_large, 1, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<2):  run_kernel<chunks_per_warp_large, warps_per_block_large, 2, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<3):  run_kernel<chunks_per_warp_large, warps_per_block_large, 3, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<4):  run_kernel<chunks_per_warp_large, warps_per_block_large, 4, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<5):  run_kernel<chunks_per_warp_large, warps_per_block_large, 5, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<6):  run_kernel<chunks_per_warp_large, warps_per_block_large, 6, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<7):  run_kernel<chunks_per_warp_large, warps_per_block_large, 7, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<8):  run_kernel<chunks_per_warp_large, warps_per_block_large, 8, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
             case (1<<9):  run_kernel<launch_configs_big[0][0], launch_configs_big[0][1], 9 , launch_configs_big[0][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
             case (1<<10): run_kernel<launch_configs_big[1][0], launch_configs_big[1][1], 10, launch_configs_big[1][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
             case (1<<11): run_kernel<launch_configs_big[2][0], launch_configs_big[2][1], 11, launch_configs_big[2][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
