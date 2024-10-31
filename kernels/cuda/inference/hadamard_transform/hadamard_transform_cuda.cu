@@ -89,23 +89,31 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
     b32* a_ptr = a_start_ptr + threadid * 4;
     b32* b_frag_ptr = bfrag_arr + (blockid % warps_per_block) * num_chunks * 128 + threadid * 4;
 
+    #if (__CUDA_ARCH__ < 900) // SM80, SM89
     uint64_t cache_policy;
     asm volatile(
         "createpolicy.fractional.L2::evict_first.b64 %0, 1.0;\n"
         : "=l"(cache_policy)
     );
+    #endif
+
     #pragma unroll
     for (int k = 0; k < num_chunks; k++) {
-        if constexpr(enable_mask) {
-            if (k >= real_num_chunks)
-                break;
-        }
         size_t shared_ptr = __cvta_generic_to_shared(b_frag_ptr);
-        asm volatile(
-            "cp.async.cg.shared.global.L2::cache_hint.L2::256B [%0], [%1], 16, %2;\n"
-            "cp.async.commit_group;\n"
-            :: "l"(shared_ptr), "l"(a_ptr), "l"(cache_policy)
-        );
+        #if (__CUDA_ARCH__ >= 900) // SM90
+            asm volatile(
+                "cp.async.cg.shared.global [%0], [%1], 16;\n"
+                "cp.async.commit_group;\n"
+                :: "l"(shared_ptr), "l"(a_ptr)
+            );
+        #else // SM80, SM89
+            asm volatile(
+                "cp.async.cg.shared.global.L2::cache_hint.L2::256B [%0], [%1], 16, %2;\n"
+                "cp.async.commit_group;\n"
+                :: "l"(shared_ptr), "l"(a_ptr), "l"(cache_policy)
+            );
+        #endif
+
         a_ptr += 128;
         b_frag_ptr += 128;
     }
