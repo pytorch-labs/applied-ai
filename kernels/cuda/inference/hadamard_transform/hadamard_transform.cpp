@@ -5,6 +5,7 @@
 
 using namespace torch::indexing;
 
+template <torch::ScalarType dtype>
 void run_fht(void* a, void* out, uint32_t numel, uint32_t had_size, cudaStream_t stream);
 
 constexpr bool is_power_of_two(uint32_t x) {
@@ -13,7 +14,7 @@ constexpr bool is_power_of_two(uint32_t x) {
 
 torch::Tensor hadamard_transform(at::Tensor& in, bool inplace) {
     auto dtype = in.scalar_type();
-    TORCH_CHECK(dtype == torch::ScalarType::Half, "Only fp16 supported currently");
+    TORCH_CHECK(dtype == torch::ScalarType::Half || dtype == torch::ScalarType::BFloat16, "Only fp16 and bf16 supported currently");
     TORCH_CHECK(in.is_cuda());
     
     const int had_size = in.size(-1);
@@ -35,7 +36,12 @@ torch::Tensor hadamard_transform(at::Tensor& in, bool inplace) {
 
     at::cuda::CUDAGuard device_guard{(char)x.get_device()};
     auto stream = at::cuda::getCurrentCUDAStream().stream();
-    run_fht(x.data_ptr(), out.data_ptr(), x.numel(), had_size, stream);
+
+    if (dtype == torch::ScalarType::Half) {
+        run_fht<torch::ScalarType::Half>(x.data_ptr(), out.data_ptr(), x.numel(), had_size, stream);
+    } else {
+        run_fht<torch::ScalarType::BFloat16>(x.data_ptr(), out.data_ptr(), x.numel(), had_size, stream);
+    }
 
     if (numel % 256 != 0) {
         out = out.index({Slice(0, numel / had_size)});

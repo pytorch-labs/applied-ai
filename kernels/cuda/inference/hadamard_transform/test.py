@@ -24,9 +24,14 @@ failed_tests = 0
 def get_scale(size):
     return math.sqrt(1 / size)
 
-truth_hadamards = [(torch.tensor(scipy.linalg.hadamard(size), device='cuda', dtype=torch.float32) * get_scale(size)).to(torch.float16) for size in test_sizes_m]
+truth_hadamards = [torch.tensor(scipy.linalg.hadamard(size), device='cuda', dtype=torch.float32) * get_scale(size) for size in test_sizes_m]
+truth_hadamards = [(x.to(torch.float16), x.to(torch.bfloat16)) for x in truth_hadamards]
+truth_hadamards_fp16, truth_hadamards_bf16 = zip(*truth_hadamards)
+truth_hadamards_fp16 = list(truth_hadamards_fp16)
+truth_hadamards_bf16 = list(truth_hadamards_bf16)
+del truth_hadamards
 
-def truth_hadamard_transform_inplace(a: torch.Tensor):
+def truth_hadamard_transform_inplace(a: torch.Tensor, truth_hadamards):
     target_index = -1
     for i in range(len(test_sizes_m)):
         if test_sizes_m[i] == a.shape[1]:
@@ -40,8 +45,8 @@ def test_hadamard_transform_inplace_rowmajor(a: torch.Tensor):
 
 torch.manual_seed(0)
 
-def check_correctness(m, elem_c, a, result, truth):
-    success = torch.allclose(truth, result, atol=1e-2, rtol=0) # TODO: NOTE: we are not accurate down to 3 decimal places(atol)
+def check_correctness(m, elem_c, a, result, truth, atol=1e-2, rtol=0):
+    success = torch.allclose(truth, result, atol=atol, rtol=rtol)
 
     if not success:
         torch.set_printoptions(threshold=100)
@@ -72,19 +77,24 @@ for m in test_sizes_m:
             continue
         print(f'Testing size {m}x{elem_c // m}')
 
-        a = torch.randn((elem_c // m, m), device='cuda', dtype=torch.float16)
+        a = torch.randn((elem_c // m, m), device='cuda', dtype=torch.float32)
         # a = torch.zeros((m, elem_c // m), device='cuda', dtype=torch.float16)
         # for i in range(min(a.shape[0], a.shape[1])):
         #     a[i, i] = 1.0
         if correctness_check:
             for i in range(runs_per_size):
                 # run test here
-                a_result = a.clone()
-                a_truth = a.clone()
-                result = test_hadamard_transform_inplace_rowmajor(a_result)
-                truth = truth_hadamard_transform_inplace(a_truth)
+                a_result_fp16 = a.clone().to(torch.float16)
+                a_truth_fp16 = a.clone().to(torch.float16)
+                result_fp16 = test_hadamard_transform_inplace_rowmajor(a_result_fp16)
+                truth_fp16 = truth_hadamard_transform_inplace(a_truth_fp16, truth_hadamards_fp16)
+                check_correctness(m, elem_c, a, result_fp16, truth_fp16, atol=1e-2) # TODO: NOTE: we are not accurate down to 3 decimal places (atol)
 
-                check_correctness(m, elem_c, a, result, truth)
+                a_result_bf16 = a.clone().to(torch.bfloat16)
+                a_truth_bf16 = a.clone().to(torch.bfloat16)
+                result_bf16 = test_hadamard_transform_inplace_rowmajor(a_result_bf16)
+                truth_bf16 = truth_hadamard_transform_inplace(a_truth_bf16, truth_hadamards_bf16)
+                check_correctness(m, elem_c, a, result_bf16, truth_bf16, atol=5e-2) # TODO: NOTE: need 5x atol to pass for bf16
         else:
             # run in a row so that warmup is valid
             a_result = a # we can clobber the result cause we are only interested in timing
