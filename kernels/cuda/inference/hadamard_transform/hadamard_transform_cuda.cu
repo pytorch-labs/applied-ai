@@ -1,7 +1,7 @@
+#include <torch/extension.h>
 #include <stdint.h>
 #include <cuda_runtime.h>
 #include <mma.h>
-#include <cuda_fp16.h>
 #include <cuda/annotated_ptr>
 #include <c10/cuda/CUDAException.h>
 
@@ -14,6 +14,7 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 typedef uint32_t b32;
+typedef uint16_t b16;
 
 constexpr int launch_configs_big[7][3] = {
     // default
@@ -43,23 +44,37 @@ constexpr int launch_configs_big[7][3] = {
 };
 
 // a 4x2, b 2x2, c 2x2
-__device__ __forceinline__ void mma_m16_n8_k16_fp16_fp16_fp16_noacc(b32 a0, b32 a1, b32 a2, b32 a3, b32 b0, b32 b1, b32& c0, b32& c1){
-    //d, a, b, c
+template <torch::ScalarType dtype>
+__device__ __forceinline__ void mma_m16_n8_k16_b16_b16_b16_noacc(b32 a0, b32 a1, b32 a2, b32 a3, b32 b0, b32 b1, b32& c0, b32& c1){
+    static_assert(dtype == torch::ScalarType::Half || dtype == torch::ScalarType::BFloat16);
+    // d, a, b, c
     b32 zero = 0;
-    asm (
-        "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
-        "{%0, %1}, {%2, %3, %4, %5}, {%6, %7}, {%8, %9};\n\t"
-        : "=r"(c0), "=r"(c1) : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1), "r"(zero), "r"(zero)
-    );
+    if constexpr(dtype == torch::ScalarType::Half) {
+        asm (
+            "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
+            "{%0, %1}, {%2, %3, %4, %5}, {%6, %7}, {%8, %9};\n\t"
+            : "=r"(c0), "=r"(c1) : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1), "r"(zero), "r"(zero)
+        );
+    } else {
+        b32 temp0, temp1, temp2, temp3;
+        asm (
+            "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
+            "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%10, %11, %12, %13};\n\t"
+            : "=r"(temp0), "=r"(temp1), "=r"(temp2), "=r"(temp3) : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1), "r"(zero), "r"(zero), "r"(zero), "r"(zero)
+        );
+        asm ("cvt.rn.bf16x2.f32 %0, %1, %2;\n\t" : "=r"(c0) : "r"(temp1), "r"(temp0));
+        asm ("cvt.rn.bf16x2.f32 %0, %1, %2;\n\t" : "=r"(c1) : "r"(temp3), "r"(temp2));
+    }
 }
 
 // a 4x2, b 4x2, c 4x2
-__device__ __forceinline__ void mma_m16_n16_k16_fp16_fp16_fp16_noacc(b32 a0, b32 a1, b32 a2, b32 a3, b32 b0, b32 b1, b32 b2, b32 b3, b32& c0, b32& c1, b32& c2, b32& c3){
-    mma_m16_n8_k16_fp16_fp16_fp16_noacc(a0, a1, a2, a3, b0, b1, c0, c1);
-    mma_m16_n8_k16_fp16_fp16_fp16_noacc(a0, a1, a2, a3, b2, b3, c2, c3);
+template <torch::ScalarType dtype>
+__device__ __forceinline__ void mma_m16_n16_k16_b16_b16_b16_noacc(b32 a0, b32 a1, b32 a2, b32 a3, b32 b0, b32 b1, b32 b2, b32 b3, b32& c0, b32& c1, b32& c2, b32& c3){
+    mma_m16_n8_k16_b16_b16_b16_noacc<dtype>(a0, a1, a2, a3, b0, b1, c0, c1);
+    mma_m16_n8_k16_b16_b16_b16_noacc<dtype>(a0, a1, a2, a3, b2, b3, c2, c3);
 }
 
-__device__ __forceinline__ void matrix_transpose_m8_n8_fp16_inplace(b32& a0) {
+__device__ __forceinline__ void matrix_transpose_m8_n8_b16_inplace(b32& a0) {
     asm (
         "movmatrix.sync.aligned.m8n8.trans.b16 "
         "%0, %1;\n\t"
@@ -67,16 +82,18 @@ __device__ __forceinline__ void matrix_transpose_m8_n8_fp16_inplace(b32& a0) {
     );
 }
 
-#define p_p(i) ((fp16_1p[i] & 0x0000FFFF) | fp16_1p[i] << 16)
-#define p_n(i) ((fp16_1p[i] & 0x0000FFFF) | fp16_1n[i] << 16)
-#define n_p(i) ((fp16_1n[i] & 0x0000FFFF) | fp16_1p[i] << 16)
-#define n_n(i) ((fp16_1n[i] & 0x0000FFFF) | fp16_1n[i] << 16)
+#define p_p(i) ((val_1p[i] & 0x0000FFFF) | val_1p[i] << 16)
+#define p_n(i) ((val_1p[i] & 0x0000FFFF) | val_1n[i] << 16)
+#define n_p(i) ((val_1n[i] & 0x0000FFFF) | val_1p[i] << 16)
+#define n_n(i) ((val_1n[i] & 0x0000FFFF) | val_1n[i] << 16)
 
-template<int num_chunks, int warps_per_block, int log_had_size, int blocks_per_sm, bool enable_mask>
+template<int num_chunks, int warps_per_block, int log_had_size, int blocks_per_sm, bool enable_mask, torch::ScalarType dtype>
 __global__ void __launch_bounds__(32 * warps_per_block, blocks_per_sm)
 // a is column major, b is row major
-hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
-    b32 b_frag_all[num_chunks][4]; // for all chunks, holds matrix fragment (which takes 4 regs of fp16x2 * 32 threads)
+hadamard_transform_kernel(b16* a, b16* out, int total_num_chunks) {
+    static_assert(dtype == torch::ScalarType::Half || dtype == torch::ScalarType::BFloat16, "Only fp16 and bf16 supported currently");
+
+    b32 b_frag_all[num_chunks][4]; // for all chunks, holds matrix fragment (which takes 4 regs of b16x2 * 32 threads)
 
     uint blockid = blockIdx.x * warps_per_block + threadIdx.x / 32;
     uint threadid = threadIdx.x % 32;
@@ -119,8 +136,16 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
     }
 
     // generate hadamard 16x16 (up to 2 of them)
-    constexpr uint16_t fp16_1p[4] = {0b0011100110101000, 0b0011100000000000, 0b0011010110101000, 0b0011010000000000};// 0b0011110000000000;
-    constexpr uint16_t fp16_1n[4] = {0b1011100110101000, 0b1011100000000000, 0b1011010110101000, 0b1011010000000000};// 0b1011110000000000;
+    constexpr b16 fp16_1p[4] = {0b0011100110101000, 0b0011100000000000, 0b0011010110101000, 0b0011010000000000};
+    constexpr b16 fp16_1n[4] = {0b1011100110101000, 0b1011100000000000, 0b1011010110101000, 0b1011010000000000};
+    constexpr b16 bf16_1p[4] = {0b0011111100110101, 0b0011111100000000, 0b0011111010110101, 0b0011111010000000};
+    constexpr b16 bf16_1n[4] = {0b1011111100110101, 0b1011111100000000, 0b1011111010110101, 0b1011111010000000};
+
+    #define val_type_1p(i) (((dtype) == torch::ScalarType::Half) ? (fp16_1p[i]) : (bf16_1p[i]))
+    #define val_type_1n(i) (((dtype) == torch::ScalarType::Half) ? (fp16_1n[i]) : (bf16_1n[i]))
+    constexpr b16 val_1p[4] = {val_type_1p(0), val_type_1p(1), val_type_1p(2), val_type_1p(3)};
+    constexpr b16 val_1n[4] = {val_type_1n(0), val_type_1n(1), val_type_1n(2), val_type_1n(3)};
+
     constexpr b32 p_p[4] = {p_p(0), p_p(1), p_p(2), p_p(3)};
     constexpr b32 p_n[4] = {p_n(0), p_n(1), p_n(2), p_n(3)};
     constexpr b32 n_p[4] = {n_p(0), n_p(1), n_p(2), n_p(3)};
@@ -453,8 +478,8 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
             }
 
             if (l == 1) {
-                // for second iteration, we load 2 consecutive fp16s (1 b32) per register,
-                // but tensor core register layout requires 2 fp16s that are in the
+                // for second iteration, we load 2 consecutive b16s (1 b32) per register,
+                // but tensor core register layout requires 2 b16s that are in the
                 // same column/consecutive rows to be in the same register, so do the swap
                 b32 f0 = ((b_frag_all[k][1] & 0xFFFF) << 16) | (b_frag_all[k][0] & 0xFFFF);
                 b32 f1 = ((b_frag_all[k][3] & 0xFFFF) << 16) | (b_frag_all[k][2] & 0xFFFF);
@@ -469,15 +494,15 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
             #pragma unroll
             for(int i = 0, remaining_log_had_size = log_had_size - l * 8; i < 2 && remaining_log_had_size > 0; i++) {
                 int had_off = ((remaining_log_had_size < 4) && !(log_had_size <= 4 || log_had_size % 4 == 0)) ? 4 : 0;
-                mma_m16_n16_k16_fp16_fp16_fp16_noacc(had_frag[had_off + 0], had_frag[had_off + 1], had_frag[had_off + 2], had_frag[had_off + 3], b_frag_all[k][0], b_frag_all[k][1], b_frag_all[k][2], b_frag_all[k][3], b_frag_all[k][0], b_frag_all[k][1], b_frag_all[k][2], b_frag_all[k][3]);
+                mma_m16_n16_k16_b16_b16_b16_noacc<dtype>(had_frag[had_off + 0], had_frag[had_off + 1], had_frag[had_off + 2], had_frag[had_off + 3], b_frag_all[k][0], b_frag_all[k][1], b_frag_all[k][2], b_frag_all[k][3], b_frag_all[k][0], b_frag_all[k][1], b_frag_all[k][2], b_frag_all[k][3]);
 
                 remaining_log_had_size -= 4;
                 if (remaining_log_had_size <= 0 && i == 0) {
                     // TODO: consider different storing so no need for transpose
-                    matrix_transpose_m8_n8_fp16_inplace(b_frag_all[k][0]);
-                    matrix_transpose_m8_n8_fp16_inplace(b_frag_all[k][1]);
-                    matrix_transpose_m8_n8_fp16_inplace(b_frag_all[k][2]);
-                    matrix_transpose_m8_n8_fp16_inplace(b_frag_all[k][3]);
+                    matrix_transpose_m8_n8_b16_inplace(b_frag_all[k][0]);
+                    matrix_transpose_m8_n8_b16_inplace(b_frag_all[k][1]);
+                    matrix_transpose_m8_n8_b16_inplace(b_frag_all[k][2]);
+                    matrix_transpose_m8_n8_b16_inplace(b_frag_all[k][3]);
                 } else {
                     // swap and use output directly as b_frag for next iteration as an actually free transpose
                     b32 temp = b_frag_all[k][1];
@@ -561,7 +586,7 @@ hadamard_transform_kernel(half* a, half* out, int total_num_chunks) {
                 // for size 4k and above, wait to process all chunks so a final store can be performed coalesced
             }
 
-            a_chunk_ptr += 128; // (only affects first 256 size) move on to next chunk by skipping 256 elements in fp16 (= 128 in b32)
+            a_chunk_ptr += 128; // (only affects first 256 size) move on to next chunk by skipping 256 elements in b16 (= 128 in b32)
             out_chunk_ptr += 128;
             if constexpr(log_had_size > 8) {
                 b_frag_ptr += (l == 0 ? 128 : (128 >> part8_log_had_size));
@@ -638,8 +663,8 @@ constexpr int ceil_div(int a, int b) {
     return (a + b - 1) / b;
 }
 
-template <int chunks_per_warp, int warps_per_block, int log_had_size, int blocks_per_sm, bool check_masking = false>
-void __forceinline__ run_kernel(half* a_mat, half* out, int num_chunks, cudaStream_t stream) {
+template <torch::ScalarType dtype, int chunks_per_warp, int warps_per_block, int log_had_size, int blocks_per_sm, bool check_masking = false>
+void __forceinline__ run_kernel(b16* a_mat, b16* out, int num_chunks, cudaStream_t stream) {
     int shared_size = chunks_per_warp * warps_per_block * 128 * 4;
     dim3 block_size = 32 * warps_per_block;
 
@@ -652,26 +677,27 @@ void __forceinline__ run_kernel(half* a_mat, half* out, int num_chunks, cudaStre
     if constexpr(check_masking) {
         if (num_chunks % (chunks_per_warp * warps_per_block) != 0) {
             dim3 grid_size = ceil_div(ceil_div(num_chunks, chunks_per_warp), warps_per_block);
-            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, true>;
+            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, true, dtype>;
             CHECK_SHARED_LIM();
-            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>(a_mat, out, num_chunks);
         } else {
             dim3 grid_size = num_chunks / chunks_per_warp / warps_per_block;
-            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false>;
+            auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false, dtype>;
             CHECK_SHARED_LIM();
-            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+            kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>(a_mat, out, num_chunks);
         }
     } else {
         dim3 grid_size = num_chunks / chunks_per_warp / warps_per_block;
-        auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false>;
+        auto kernel = hadamard_transform_kernel<chunks_per_warp, warps_per_block, log_had_size, blocks_per_sm, false, dtype>;
         CHECK_SHARED_LIM();
-        kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>((half*) a_mat, out, num_chunks);
+        kernel<<<dim3(grid_size), dim3(block_size), shared_size, stream>>>(a_mat, out, num_chunks);
     }
     
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void run_fht(void* a_mat, void* out, uint32_t numel, uint32_t had_size, cudaStream_t stream) {
+template <torch::ScalarType dtype>
+void run_fht(void* a_mat_ptr, void* out_ptr, uint32_t numel, uint32_t had_size, cudaStream_t stream) {
     uint32_t num_chunks = numel / 256; // caller required to ensure divisible by 256
     // for size 256, use (2, 1)
     // for size 32k use (8, 16)
@@ -682,34 +708,42 @@ void run_fht(void* a_mat, void* out, uint32_t numel, uint32_t had_size, cudaStre
     constexpr int warps_per_block_large = 1;
     constexpr int blocks_per_sm_large = 24;
 
+    // constexpr torch::ScalarType dtype = torch::ScalarType::Half;
+
+    b16* a_mat = (b16*) a_mat_ptr;
+    b16* out = (b16*) out_ptr;
+
     if (numel <= 256) {
         switch (had_size) {
-            case (1<<1): run_kernel<chunks_per_warp_small, warps_per_block_small, 1, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<2): run_kernel<chunks_per_warp_small, warps_per_block_small, 2, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<3): run_kernel<chunks_per_warp_small, warps_per_block_small, 3, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<4): run_kernel<chunks_per_warp_small, warps_per_block_small, 4, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<5): run_kernel<chunks_per_warp_small, warps_per_block_small, 5, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<6): run_kernel<chunks_per_warp_small, warps_per_block_small, 6, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<7): run_kernel<chunks_per_warp_small, warps_per_block_small, 7, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<8): run_kernel<chunks_per_warp_small, warps_per_block_small, 8, blocks_per_sm_small>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<1): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 1, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<2): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 2, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<3): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 3, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<4): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 4, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<5): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 5, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<6): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 6, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<7): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 7, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
+            case (1<<8): run_kernel<dtype, chunks_per_warp_small, warps_per_block_small, 8, blocks_per_sm_small>(a_mat, out, num_chunks, stream); break;
         }
     } else {
         switch (had_size) {
-            case (1<<1):  run_kernel<chunks_per_warp_large, warps_per_block_large, 1, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<2):  run_kernel<chunks_per_warp_large, warps_per_block_large, 2, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<3):  run_kernel<chunks_per_warp_large, warps_per_block_large, 3, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<4):  run_kernel<chunks_per_warp_large, warps_per_block_large, 4, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<5):  run_kernel<chunks_per_warp_large, warps_per_block_large, 5, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<6):  run_kernel<chunks_per_warp_large, warps_per_block_large, 6, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<7):  run_kernel<chunks_per_warp_large, warps_per_block_large, 7, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<8):  run_kernel<chunks_per_warp_large, warps_per_block_large, 8, blocks_per_sm_large, true>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<9):  run_kernel<launch_configs_big[0][0], launch_configs_big[0][1], 9 , launch_configs_big[0][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<10): run_kernel<launch_configs_big[1][0], launch_configs_big[1][1], 10, launch_configs_big[1][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<11): run_kernel<launch_configs_big[2][0], launch_configs_big[2][1], 11, launch_configs_big[2][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<12): run_kernel<launch_configs_big[3][0], launch_configs_big[3][1], 12, launch_configs_big[3][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<13): run_kernel<launch_configs_big[4][0], launch_configs_big[4][1], 13, launch_configs_big[4][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<14): run_kernel<launch_configs_big[5][0], launch_configs_big[5][1], 14, launch_configs_big[5][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
-            case (1<<15): run_kernel<launch_configs_big[6][0], launch_configs_big[6][1], 15, launch_configs_big[6][2]>((half*) a_mat, (half*) out, num_chunks, stream); break;
+            case (1<<1):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 1, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<2):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 2, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<3):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 3, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<4):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 4, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<5):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 5, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<6):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 6, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<7):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 7, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<8):  run_kernel<dtype, chunks_per_warp_large, warps_per_block_large, 8, blocks_per_sm_large, true>(a_mat, out, num_chunks, stream); break;
+            case (1<<9):  run_kernel<dtype, launch_configs_big[0][0], launch_configs_big[0][1], 9 , launch_configs_big[0][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<10): run_kernel<dtype, launch_configs_big[1][0], launch_configs_big[1][1], 10, launch_configs_big[1][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<11): run_kernel<dtype, launch_configs_big[2][0], launch_configs_big[2][1], 11, launch_configs_big[2][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<12): run_kernel<dtype, launch_configs_big[3][0], launch_configs_big[3][1], 12, launch_configs_big[3][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<13): run_kernel<dtype, launch_configs_big[4][0], launch_configs_big[4][1], 13, launch_configs_big[4][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<14): run_kernel<dtype, launch_configs_big[5][0], launch_configs_big[5][1], 14, launch_configs_big[5][2]>(a_mat, out, num_chunks, stream); break;
+            case (1<<15): run_kernel<dtype, launch_configs_big[6][0], launch_configs_big[6][1], 15, launch_configs_big[6][2]>(a_mat, out, num_chunks, stream); break;
         }
     }
 }
+
+template void run_fht<torch::ScalarType::Half>(void* a_mat_ptr, void* out_ptr, uint32_t numel, uint32_t had_size, cudaStream_t stream);
+template void run_fht<torch::ScalarType::BFloat16>(void* a_mat_ptr, void* out_ptr, uint32_t numel, uint32_t had_size, cudaStream_t stream);
