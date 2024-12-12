@@ -17,7 +17,7 @@ mkdir build && cd build
 cmake .. -DCUTLASS_NVCC_ARCHS=90a -DCUTLASS_ENABLE_TESTS=OFF -DCUTLASS_UNITY_BUILD_ENABLED=ON
 
 # 3. Install the Python package
-pip install -e .
+cd ../../ && pip install -e .
 
 # 4. Run the test script
 python test_cutlass_gemm.py
