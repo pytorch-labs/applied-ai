@@ -26,3 +26,6 @@ RUN cd /workspace/cutlass && git checkout 06b21349bcf6ddf6a1686a47a137ad1446579d
 # Install cutlass
 RUN cd /workspace/cutlass && mkdir -p build
 RUN cd /workspace/cutlass/build && cmake .. -DCUTLASS_NVCC_ARCHS=90a -DCUTLASS_ENABLE_TESTS=OFF -DCUTLASS_UNITY_BUILD_ENABLED=ON
+
+# Install cutlass gemm
+RUN cd /workspace/ && pip install -e .
