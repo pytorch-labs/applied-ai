@@ -1,6 +1,0 @@
-[submodule "kernels/cuda/cutlass_gemm/cutlass"]
-	path = kernels/cuda/cutlass_gemm/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
-[submodule "kernels/cuda/cutlass_gemm/cutlass_3.5.1"]
-	path = kernels/cuda/cutlass_gemm/cutlass_3.5.1
-	url = https://github.com/NVIDIA/cutlass.git
