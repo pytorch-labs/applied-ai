@@ -1,5 +1,6 @@
 # flash forward v2
 
+import gc
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -30,6 +31,22 @@ def check_device() -> bool:
 
 
 @triton.autotune(
+    [
+        triton.Config(
+            {"BLOCK_SIZE_Q": BLOCK_SIZE_Q, "BLOCK_SIZE_KV": BLOCK_SIZE_KV},
+            num_stages=num_stages,
+            num_warps=num_warps,
+        )
+        for BLOCK_SIZE_Q in [64, 128]
+        for BLOCK_SIZE_KV in [32, 64]
+        for num_stages in ([3, 4, 7])
+        for num_warps in [2, 4]
+    ],
+    key=["SEQ_LEN", "HEAD_DIM"],
+)
+
+'''
+@triton.autotune(
     configs=[
         triton.Config(
             {
@@ -46,6 +63,9 @@ def check_device() -> bool:
     ],
     key=["seq_len", "head_dim"],
 )
+'''
+
+
 def generic_attention(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, scale_attn: float = None
 ) -> torch.Tensor:
@@ -247,3 +267,95 @@ class SRAMAttention(torch.autograd.Function):
         ctx.causal = causal
         ctx.scale_attn = scale_attn
         return out
+
+
+def sram_attention_forward(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    causal: bool = True,
+    scale_attn: Optional[float] = None,
+) -> torch.Tensor:
+    """Wrapper around SRAMAttention forward pass"""
+    # returns: Output tensor of shape (batch_size, num_heads, seq_len, head_dim)
+
+    check_device()
+    if not all(x.is_contiguous() for x in (query, key, value)):
+        raise ValueError("Input tensors must be contiguous")
+    if not all(x.is_cuda for x in (query, key, value)):
+        raise ValueError("Input tensors must be on CUDA device")
+
+    return SRAMAttention.apply(query, key, value, causal, scale_attn)
+
+
+def test_correctness(
+    batch_size: int = 2,
+    num_heads: int = 4,
+    seq_len: int = 128,
+    head_dim: int = 64,
+    dtype: torch.dtype = torch.bfloat16,
+    atol: float = 1e-3,
+    rtol: float = 1e-4,
+) -> bool:
+    """
+    Test the correctness of Flash Attention implementation against vanilla attention.
+
+    Args:
+        batch_size: Batch size for test tensors
+        num_heads: Number of attention heads
+        seq_len: Sequence length
+        head_dim: Dimension of each head
+        dtype: Data type for test tensors
+        atol: Absolute tolerance for comparison
+        rtol: Relative tolerance for comparison
+
+    Returns:
+        bool: True if test passes, False otherwise
+    """
+    try:
+        torch.manual_seed(42)
+        device = torch.device("cuda")
+
+        # Create test inputs
+        q = torch.randn(
+            batch_size, num_heads, seq_len, head_dim, device=device, dtype=dtype
+        )
+        k = torch.randn_like(q)
+        v = torch.randn_like(q)
+
+        # Run both implementations
+        with torch.no_grad():
+            flash_output = sram_attention_forward(q, k, v, causal=True)
+            vanilla_output = generic_attention(q, k, v, causal=True)
+
+        # Compare outputs
+        max_diff = torch.max(torch.abs(flash_output - vanilla_output))
+        mean_diff = torch.mean(torch.abs(flash_output - vanilla_output))
+
+        print(f"Maximum difference: {max_diff:.6f}")
+        print(f"Mean difference: {mean_diff:.6f}")
+
+        # Test backward pass
+        """flash_output.sum().backward()
+        assert q.grad is not None, "Gradient not computed for query"
+        assert k.grad is not None, "Gradient not computed for key"
+        assert v.grad is not None, "Gradient not computed for value"
+        """
+
+        return max_diff < atol and mean_diff < rtol
+
+    except Exception as e:
+        print(f"Error during correctness testing: {str(e)}")
+        return False
+    finally:
+        torch.cuda.empty_cache()
+        gc.collect()
+
+
+if __name__ == "__main__":
+    print("Running correctness test...")
+    is_correct = test_correctness()
+    if is_correct:
+        print("✓ Implementation is correct!")
+    else:
+        print("✗ Implementation might have issues!")
