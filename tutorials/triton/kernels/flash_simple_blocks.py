@@ -53,7 +53,7 @@ def _attn_fwd_inner(
         l_i = l_i * alpha + l_ij
 
         V_block = tl.load(V_block_ptr)
-        P_block = P_block.to(tl.float16)
+        P_block = P_block.to(tl.bfloat16)
         O_block = O_block * alpha[:, None]
         O_block = tl.dot(P_block, V_block, O_block)
 
@@ -296,7 +296,7 @@ def _attn_bwd_dq(
 
         dP_block = tl.dot(dO_block, V_T_block).to(tl.float32)
         dS_block = P_block * (dP_block - Di[:, None])
-        dS_block = dS_block.to(tl.float16)
+        dS_block = dS_block.to(tl.bfloat16)
         dQ_block += softmax_scale * tl.dot(dS_block, tl.trans(K_T_block))
 
         curr_kv += BLOCK_KV
@@ -378,13 +378,13 @@ def _attn_bwd_dkv(
         P_T_block = tl.where(mask_block, P_T_block, 0.0)
 
         dO_block = tl.load(dO_ptrs)
-        dV_block += tl.dot(P_T_block.to(tl.float16), dO_block)
+        dV_block += tl.dot(P_T_block.to(tl.bfloat16), dO_block)
 
         Di = tl.load(D + offs_q)
         dpT_block = tl.dot(V_block, tl.trans(dO_block)).to(tl.float32)
         dS_T_block = P_T_block * (dpT_block - Di[None, :])
         dK_block += softmax_scale * tl.dot(
-            dS_T_block.to(tl.float16), tl.trans(qT_block)
+            dS_T_block.to(tl.bfloat16), tl.trans(qT_block)
         )
 
         curr_q += BLOCK_Q
@@ -534,7 +534,7 @@ def test_causal_attention():
         SEQ_LEN,
         HEAD_DIM,
         device="cuda",
-        dtype=torch.float16,
+        dtype=torch.bfloat16,
         requires_grad=True,
     )
     K = torch.randn_like(Q, requires_grad=True)
@@ -561,7 +561,7 @@ def test_causal_attention():
 
     max_error = (triton_out - torch_out).abs().max().item()
     print(f"Max forward pass error: {max_error}")
-    assert max_error < 1e-2, "Forward pass error too large"
+    assert max_error < 1e-1, "Forward pass error too large"
 
     # Backward pass comparison
     triton_out.backward(dO, retain_graph=True)
@@ -574,7 +574,7 @@ def test_causal_attention():
     ]:
         max_error = (triton_grad - torch_grad).abs().max().item()
         print(f"Max {name} backward pass error: {max_error}")
-        assert max_error < 1e-2, f"{name} backward pass error too large"
+        assert max_error < 1e-1, f"{name} backward pass error too large"
 
     print("All tests passed!")
 
