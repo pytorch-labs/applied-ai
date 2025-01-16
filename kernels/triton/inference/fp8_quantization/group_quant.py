@@ -3,39 +3,22 @@ from typing import Tuple
 import torch
 import triton
 import triton.language as tl
-from triton import Config
-
-"""
-1 - ValueError: arange's arguments must be of type tl.constexpr
-2 - return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
-AttributeError: 'function' object has no attribute 'arg_names'
-"""
 
 
+# Define kernel without autotuning first
 @triton.jit
-def group_quant_kernel(
+def group_quant_kernel_base(
     x_ptr,
     y_ptr,
     s_ptr,
     stride,
     n_elements,
+    BLOCK_SIZE: tl.constexpr,  # For arange
     GROUP_SIZE: tl.constexpr,  # Fixed at 128
     NUM_CHUNKS: tl.constexpr,  # For multi-chunk processing
 ):
-    """
-    H100-optimized quantization kernel with fixed group size of 128.
-    Uses multi-chunk processing and H100-specific optimizations.
-
-    Args:
-        x_ptr: Input tensor pointer
-        y_ptr: Output quantized tensor pointer
-        s_ptr: Output scale tensor pointer
-        stride: Stride for the input tensor
-        n_elements: Total number of elements
-        GROUP_SIZE: Fixed at 128 for quantization
-        NUM_CHUNKS: Number of chunks to process per thread block
-    """
     pid = tl.program_id(axis=0)
+    group_idx = pid // NUM_CHUNKS
 
     # Process multiple chunks of size 128 per thread block
     chunk_size = GROUP_SIZE
@@ -44,69 +27,96 @@ def group_quant_kernel(
     # Initialize max value accumulator
     max_val = tl.zeros([1], dtype=tl.float32)
 
+    # Create block arange once
+    offs_init = tl.arange(0, BLOCK_SIZE)
+
     # Process multiple chunks
     for chunk in range(NUM_CHUNKS):
-        # Calculate current chunk offset
         chunk_base = base_idx + chunk * chunk_size
-        offs = chunk_base + tl.arange(0, chunk_size)
-
-        # Create mask for bounds checking
+        offs = chunk_base + offs_init
         mask = offs < n_elements
 
-        # Load data with improved memory coalescing
         x = tl.load(x_ptr + offs * stride, mask=mask, other=0.0)
-
-        # Update maximum using vectorized reduction
         x_abs = tl.abs(x)
         chunk_max = tl.max(x_abs, axis=0)
         max_val = tl.maximum(max_val, chunk_max)
 
-    # Calculate scale factor using H100's FP8 range
-    s = max_val / 448.0  # Keep the original scaling factor
+    s = max_val / 448.0
     s = tl.where(s == 0, 1e-10, s)  # Avoid division by zero
 
-    # Process chunks again for quantization
     for chunk in range(NUM_CHUNKS):
         chunk_base = base_idx + chunk * chunk_size
-        offs = chunk_base + tl.arange(0, chunk_size)
+        offs = chunk_base + offs_init
         mask = offs < n_elements
 
-        # Load and quantize with improved precision
         x = tl.load(x_ptr + offs * stride, mask=mask, other=0.0)
         y = tl.where(mask, x / s, 0.0)
-
-        # Apply stochastic rounding for better quantization
-        # H100 supports efficient random number generation
-        rand = tl.rand(y.shape, dtype=tl.float32)
-        y = tl.floor(y + rand)
-
-        # Store results
+        # rand = tl.rand(y.shape)  # , dtype=tl.float32)
+        # y = tl.floor(y + rand)
         y = y.to(y_ptr.dtype.element_ty)
         tl.store(y_ptr + offs * stride, y, mask=mask)
 
-    # Store scale factor (one per group)
-    group_idx = pid // NUM_CHUNKS
     if pid % NUM_CHUNKS == 0:
         tl.store(s_ptr + group_idx, s)
 
 
-# Optimized configurations for H100
-h100_configs = [
-    Config(
-        {
-            "GROUP_SIZE": 128,  # Fixed as per requirement
-            "NUM_CHUNKS": nc,
-        },
-        num_warps=w,
-        num_stages=s,
+# launch the kernel with different configs
+def group_quant_kernel(
+    grid,
+    x_ptr,
+    y_ptr,
+    s_ptr,
+    stride,
+    n_elements,
+    BLOCK_SIZE: int,
+    GROUP_SIZE: int,
+    NUM_CHUNKS: int,
+    num_warps: int,
+    num_stages: int,
+):
+    group_quant_kernel_base[grid](
+        x_ptr,
+        y_ptr,
+        s_ptr,
+        stride,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+        GROUP_SIZE=GROUP_SIZE,
+        NUM_CHUNKS=NUM_CHUNKS,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
-    for nc in [1, 2, 4]  # Process multiple chunks per block
-    for w in [4, 8]  # H100 supports more warps efficiently
-    for s in [3, 4]  # Pipeline stages for H100
-]
 
 
-# @triton.autotune(configs=h100_configs, key=["n_elements"])
+# Define autotuned version using heuristics
+def autotune_group_quant(n_elements):
+    # Heuristic autotuning based on input size
+    if n_elements < 1_000_000:  # Small inputs
+        return {
+            "BLOCK_SIZE": 128,
+            "GROUP_SIZE": 128,
+            "NUM_CHUNKS": 1,
+            "num_warps": 4,
+            "num_stages": 3,
+        }
+    elif n_elements < 10_000_000:  # Medium inputs
+        return {
+            "BLOCK_SIZE": 128,
+            "GROUP_SIZE": 128,
+            "NUM_CHUNKS": 2,
+            "num_warps": 8,
+            "num_stages": 4,
+        }
+    else:  # Large inputs
+        return {
+            "BLOCK_SIZE": 128,
+            "GROUP_SIZE": 128,
+            "NUM_CHUNKS": 4,
+            "num_warps": 8,
+            "num_stages": 4,
+        }
+
+
 def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     H100-optimized activation quantization with fixed group size of 128.
@@ -117,61 +127,53 @@ def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     Returns:
         Tuple of (quantized tensor, scale factors)
     """
-    # assert x.is_contiguous(), "Input tensor must be contiguous"
     if not x.is_contiguous():
         x = x.contiguous()
 
-    # Calculate grid dimensions with fixed group size
+    # Get input size and calculate grid
     n_elements = x.numel()
-    num_chunks = 2  # Default number of chunks (will be autotuned)
-    groups = triton.cdiv(n_elements, 128 * num_chunks)
+
+    # Get tuned parameters based on input size
+    params = autotune_group_quant(n_elements)
+
+    # Calculate number of groups
+    groups = triton.cdiv(n_elements, params["GROUP_SIZE"] * params["NUM_CHUNKS"])
 
     # Prepare output tensors
     y = torch.empty_like(x, dtype=torch.float8_e4m3fn)
     s = torch.empty((groups,), dtype=torch.float32, device=x.device)
 
-    # Launch kernel with autotuning
-    group_quant_kernel[(groups,)](
+    # Launch kernel with tuned parameters
+    group_quant_kernel(
+        grid=(groups,),
         x_ptr=x,
         y_ptr=y,
         s_ptr=s,
         stride=1,
         n_elements=n_elements,
-        GROUP_SIZE=128,
-        NUM_CHUNKS=num_chunks,
+        BLOCK_SIZE=params["BLOCK_SIZE"],
+        GROUP_SIZE=params["GROUP_SIZE"],
+        NUM_CHUNKS=params["NUM_CHUNKS"],
+        num_warps=params["num_warps"],
+        num_stages=params["num_stages"],
     )
 
     return y, s
 
 
 def verify_quantization(x: torch.Tensor, y: torch.Tensor, s: torch.Tensor) -> None:
-    """
-    Verify the quantization results.
-    """
-    # Reshape input to match group size
+    """Verify the quantization results."""
     x_grouped = x.view(-1, 128)
-
-    # Calculate expected scales
     expected_s = torch.amax(torch.abs(x_grouped), dim=1) / 448.0
-
-    # Verify scales
     torch.testing.assert_close(s, expected_s, rtol=1e-3, atol=1e-3)
-
-    # Verify quantized values are within bounds
     assert torch.all(torch.abs(y) <= 448.0), "Quantized values exceed bounds"
-
-    # Verify reconstruction
     x_recon = y * s.view(-1, 1)
     torch.testing.assert_close(x_recon, x_grouped, rtol=1e-2, atol=1e-2)
 
 
 if __name__ == "__main__":
-    # Test with random input tensor
+    # Test the implementation
     x = torch.randn(1024, 1024, device="cuda")
-
-    # Quantize and verify results
     y, s = act_quant_v2(x)
     verify_quantization(x, y, s)
-
-    # Print success message
     print("Quantization test passed!")
