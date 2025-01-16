@@ -5,20 +5,15 @@ import triton
 import triton.language as tl
 from triton import Config
 
-
-""" Auto tuning error: 
-python group_quant.py 
-Traceback (most recent call last):
-  File "/data/users/less/local/applied-ai/kernels/triton/inference/fp8_quantization/group_quant.py", line 104, in <module>
-    def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-  File "/home/less/local/miniconda3/envs/newserver/lib/python3.10/site-packages/triton/runtime/autotuner.py", line 352, in decorator
-    return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
+"""
+1 - ValueError: arange's arguments must be of type tl.constexpr
+2 - return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
 AttributeError: 'function' object has no attribute 'arg_names'
 """
 
 
 @triton.jit
-def act_quant_kernel_v2(
+def group_quant_kernel(
     x_ptr,
     y_ptr,
     s_ptr,
@@ -111,7 +106,7 @@ h100_configs = [
 ]
 
 
-@triton.autotune(configs=h100_configs, key=["n_elements"])
+# @triton.autotune(configs=h100_configs, key=["n_elements"])
 def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     H100-optimized activation quantization with fixed group size of 128.
@@ -122,7 +117,9 @@ def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     Returns:
         Tuple of (quantized tensor, scale factors)
     """
-    assert x.is_contiguous(), "Input tensor must be contiguous"
+    # assert x.is_contiguous(), "Input tensor must be contiguous"
+    if not x.is_contiguous():
+        x = x.contiguous()
 
     # Calculate grid dimensions with fixed group size
     n_elements = x.numel()
@@ -134,7 +131,7 @@ def act_quant_v2(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     s = torch.empty((groups,), dtype=torch.float32, device=x.device)
 
     # Launch kernel with autotuning
-    act_quant_kernel_v2[(groups,)](
+    group_quant_kernel[(groups,)](
         x_ptr=x,
         y_ptr=y,
         s_ptr=s,
@@ -166,3 +163,15 @@ def verify_quantization(x: torch.Tensor, y: torch.Tensor, s: torch.Tensor) -> No
     # Verify reconstruction
     x_recon = y * s.view(-1, 1)
     torch.testing.assert_close(x_recon, x_grouped, rtol=1e-2, atol=1e-2)
+
+
+if __name__ == "__main__":
+    # Test with random input tensor
+    x = torch.randn(1024, 1024, device="cuda")
+
+    # Quantize and verify results
+    y, s = act_quant_v2(x)
+    verify_quantization(x, y, s)
+
+    # Print success message
+    print("Quantization test passed!")
