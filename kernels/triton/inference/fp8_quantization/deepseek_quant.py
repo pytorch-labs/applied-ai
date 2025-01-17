@@ -49,13 +49,13 @@ def act_quant(
             - A tensor of scaling factors with dtype `torch.float32`.
     """
     assert x.is_contiguous()
-    print(f"act_quant: {x.size()}, {x.dtype}, {x.device}")
+    # print(f"act_quant: {x.size()}, {x.dtype}, {x.device}")
     assert x.size(-1) % block_size == 0
     y = torch.empty_like(x, dtype=torch.float8_e4m3fn)
     s = x.new_empty(*x.size()[:-1], x.size(-1) // block_size, dtype=torch.float32)
     grid = lambda meta: (triton.cdiv(x.numel(), meta["BLOCK_SIZE"]),)
     act_quant_kernel[grid](x, y, s, BLOCK_SIZE=block_size)
-    print(f"act_quant: {y.size()}, {y.dtype}, {y.device}")
+    # print(f"act_quant: {y.size()}, {y.dtype}, {y.device}")
     return y, s
 
 
