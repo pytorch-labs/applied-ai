@@ -1,5 +1,8 @@
+import os
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
+
+current_location = os.path.abspath(os.path.dirname(__file__))
 
 setup(
     name='cutlass_gemm',
@@ -23,11 +26,11 @@ setup(
                 ]
             },
             include_dirs=[
-                '/home/adhoq26/cutlass/include',
-                '/home/adhoq26/cutlass/tools/util/include',
+                f'{current_location}/cutlass/include',
+                f'{current_location}/cutlass/tools/util/include',
             ],
             libraries=['cuda'],
-            library_dirs=['/usr/local/cuda-12.4/lib64'],
+            library_dirs=[os.path.join(CUDA_HOME, 'lib64')],
         )
     ],
     cmdclass={
