@@ -1,5 +1,5 @@
-from pingpong_gemm import cutlass_scaled_mm
 import torch
+from pingpong_gemm import cutlass_scaled_mm
 
 m, k, n = 16, 4096, 4096
 dtype = torch.float8_e4m3fn
