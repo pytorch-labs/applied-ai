@@ -1,0 +1,4 @@
+[submodule "third_party/Liger-Kernel"]
+	path = third_party/Liger-Kernel
+	url = https://github.com/agunapal/Liger-Kernel.git
+	branch = test_liger
