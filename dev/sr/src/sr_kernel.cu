@@ -1,6 +1,7 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <stdint.h>
 
 // convert float to stochastically rounded __nv_bfloat16 (bf16)
 __device__ __forceinline__ __nv_bfloat16 float_to_SR_bf16(float x,
