@@ -1,7 +1,4 @@
 # ninja log v5
-0	13716	1739820663744356329	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/sr_cuda.o	ecdaceabd87ad13b
-1	73039	1739829135869705759	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	8e38910b4059ccb
-16	76469	1739829294629301159	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	1097e9b7d56047e7
-14	76470	1739830210468737878	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	1097e9b7d56047e7
-9	35032	1739830349921263489	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
-9	38319	1739830353207275804	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
+0	35090	1739831912112986452	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+0	38411	1739831915434998711	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
+17	35160	1739833265433057983	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
