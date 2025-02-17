@@ -1,0 +1,4 @@
+*.o
+*.ninja
+*.txt
+*.egg-info
