@@ -1,63 +1,58 @@
 #include "stochastic_rounding.hpp"
 #include <cstdint>
 
-// Performance-optimized utility function
+#define PHILOX_ROUNDS 7 // per Natalia
+
 __device__ __forceinline__ __nv_bfloat16
-float_to_bf16_stochastic(float x, curandState *state) {
-  // Use intrinsics for special case checking
-  if (__isnanf(x) || __isinff(x)) {
-    return __float2bfloat16(x);
+float_to_bf16_stochastic(float value, uint16_t rand16) {
+  // Handle special cases first
+  // TODO - is this the right response..just return?
+  if (__isnanf(value) || __isinff(value)) {
+    return __float2bfloat16(value);
   }
 
-  uint32_t x_int = __float_as_uint(x);
-
-  // Extract sign and exponent (these stay the same)
-  uint32_t sign_exp = x_int & 0xFF800000;
-
-  // Extract mantissa
-  uint32_t mantissa = x_int & 0x007FFFFF;
-
-  // Handle special case - zero or denormal
-  if (sign_exp == 0) {
-    return __float2bfloat16(x);
-  }
-
-  // Take the lowest 16 bits for probability
-  // If these bits are higher, we're more likely to round up
-  uint32_t prob_bits = mantissa & 0x0000FFFF;
-
-  // Generate random number (0-65535)
-  uint32_t rand = (uint32_t)(curand_uniform(state) * 65536.0f);
-
-  // If random number is less than prob_bits, round up the 7th mantissa bit
-  uint32_t rounded = mantissa >> 16; // Keep top 7 bits
-  if (rand < prob_bits) {
-    rounded += 1;
-    // Handle carry to exponent
-    if (rounded == 0x80) {
-      rounded = 0;
-      sign_exp += 0x00800000;
-    }
-  }
-
-  // Combine components
-  uint32_t result = sign_exp | rounded;
-
-  return __float2bfloat16(__uint_as_float(result));
+  uint32_t value_uint32 = __float_as_uint(value);
+  value_uint32 = (value_uint32 + rand16) & 0xFFFF0000u;
+  return __float2bfloat16(__uint_as_float(value_uint32));
 }
 
-// Implementation of the kernel
+// Main kernel
 __global__ void stochastic_round_bf16(float *__restrict__ input,
                                       __nv_bfloat16 *__restrict__ output,
                                       const int size,
                                       const unsigned long long seed) {
-  // Initialize random state once per thread
-  curandState state;
-  curand_init(seed, blockIdx.x * blockDim.x + threadIdx.x, 0, &state);
 
-  // Process multiple elements with the same random state
-  for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < size;
-       idx += blockDim.x * gridDim.x) {
-    output[idx] = float_to_bf16_stochastic(input[idx], &state);
+  // Initialize Philox state for this thread
+  curandStatePhilox4_32_10_t state;
+  curand_init(seed, blockIdx.x * blockDim.x + threadIdx.x, PHILOX_ROUNDS,
+              &state);
+
+  // Process elements in groups of 4
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  for (int base_idx = idx * 4; base_idx < size; base_idx += stride * 4) {
+    // Generate 4 random numbers at once
+    float4 rand4 = curand_uniform4(&state);
+    uint32_t *rand_bits = (uint32_t *)&rand4;
+
+    // Process up to 4 elements
+    for (int offset = 0; offset < 4 && base_idx + offset < size; offset++) {
+
+      uint16_t rand16_low = rand_bits[offset] & 0xFFFF;
+      uint16_t rand16_high = (rand_bits[offset] >> 16) & 0xFFFF;
+
+      // We process two elements if possible per random generation
+      // First
+      int curr_idx = base_idx + offset;
+      output[curr_idx] = float_to_bf16_stochastic(input[curr_idx], rand16_low);
+
+      // Second element if within bounds
+      int next_idx = curr_idx + 4;
+      if (next_idx < size) {
+        output[next_idx] =
+            float_to_bf16_stochastic(input[next_idx], rand16_high);
+      }
+    }
   }
 }
