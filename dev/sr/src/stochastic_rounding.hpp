@@ -4,6 +4,9 @@
 #include <curand_kernel.h>
 #include <random>
 #include <torch/extension.h>
+#include <pybind11/pybind11.h>
+namespace py = pybind11;
+
 
 // Forward declaration of CUDA kernel
 extern "C" __global__ void

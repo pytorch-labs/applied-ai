@@ -2,3 +2,7 @@
 *.ninja
 *.txt
 *.egg-info
+*.ninja-deps
+*.ninja-log
+*.so
+*.egg

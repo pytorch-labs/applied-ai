@@ -1,4 +1,7 @@
 #include "stochastic_rounding.hpp"
+#include <pybind11/pybind11.h>
+namespace py = pybind11;
+
 
 // Implementation of getOptimalBlockSize
 __host__ int getOptimalBlockSize() {
@@ -8,7 +11,7 @@ __host__ int getOptimalBlockSize() {
 }
 
 // Implementation of the CUDA wrapper
-torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input) {
+torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad = false) {
   TORCH_CHECK(input.is_cuda(), "Input tensor must be on CUDA device");
   TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
   TORCH_CHECK(input.scalar_type() == torch::kFloat32,
@@ -17,7 +20,7 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input) {
   const int threads_per_block = getOptimalBlockSize();
   const int num_elements = input.numel();
 
-  // Calculate grid size more conservatively
+  // Calculate grid size
   const int max_blocks = 65535; // Maximum blocks per grid dimension
   const int min_elements_per_thread =
       4; // Each thread processes at least 4 elements
@@ -26,11 +29,11 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input) {
       (min_elements_per_thread * threads_per_block);
   const int blocks = std::min(target_blocks, max_blocks);
 
-  // Create output tensor
+  // Create output tensor - default is no grad for return but user selectable
   auto options = torch::TensorOptions()
                      .dtype(torch::kBFloat16)
                      .device(input.device())
-                     .requires_grad(false);
+                     .requires_grad(requires_grad);
   auto output = torch::empty_like(input, options);
 
   // Generate random seed
@@ -68,6 +71,9 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("stochastic_round_bf16", &stochastic_round_bf16_cuda,
-        "Stochastic rounding to BFloat16");
+    m.def("stochastic_round_bf16",
+          static_cast<torch::Tensor (*)(torch::Tensor, bool)>(&stochastic_round_bf16_cuda),
+          "Stochastic rounding to BFloat16",
+          py::arg("input"),
+          py::arg("requires_grad") = false);
 }
