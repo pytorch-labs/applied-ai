@@ -10,7 +10,7 @@ __host__ int getOptimalBlockSize() {
   return std::min(prop.maxThreadsPerBlock, 256);
 }
 
-// Implementation of the CUDA wrapper
+// kernel wrapper
 torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad = false) {
   TORCH_CHECK(input.is_cuda(), "Input tensor must be on CUDA device");
   TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
@@ -42,27 +42,27 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad
   std::uniform_int_distribution<unsigned long long> dis;
   const unsigned long long seed = dis(gen);
 
-  // Print debug info
+  // Print debug info if failed to launch
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     printf("CUDA error before kernel launch: %s\n", cudaGetErrorString(err));
   }
 
-  printf("Launching kernel with blocks=%d, threads_per_block=%d, "
+  /*printf("Launching kernel with blocks=%d, threads_per_block=%d, "
          "num_elements=%d\n",
          blocks, threads_per_block, num_elements);
-
+  */
   // Launch kernel
   stochastic_round_bf16<<<blocks, threads_per_block>>>(
       input.data_ptr<float>(),
       reinterpret_cast<__nv_bfloat16 *>(output.data_ptr()), num_elements, seed);
 
-  // Check for CUDA errors
+  // CUDA errors
   err = cudaGetLastError();
   TORCH_CHECK(err == cudaSuccess,
               "CUDA kernel execution failed: ", cudaGetErrorString(err));
 
-  // Synchronize and check for any asynchronous errors
+  // asynchronous errors
   err = cudaDeviceSynchronize();
   TORCH_CHECK(err == cudaSuccess,
               "CUDA synchronization failed: ", cudaGetErrorString(err));
