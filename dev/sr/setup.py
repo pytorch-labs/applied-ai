@@ -4,6 +4,7 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 setup(
     name='stochastic_rounding_cuda',
+    version='0.1.021825',
     ext_modules=[
         CUDAExtension('stochastic_rounding_cuda', [
             'src/stochastic_rounding.cu',
