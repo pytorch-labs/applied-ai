@@ -17,4 +17,22 @@ stochastic_round_bf16(float *__restrict__ input,
 __host__ int getOptimalBlockSize();
 
 // C++ wrapper for the CUDA kernel - declaration only
-torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input);
+//torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input);
+
+// Architecture-specific configuration
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+// Hopper-specific configurations
+#define OPTIMAL_BLOCK_SIZE 256
+#define VECTOR_SIZE 4
+#define ELEMENTS_PER_THREAD 8
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+// Ampere-specific configurations
+#define OPTIMAL_BLOCK_SIZE 256
+#define VECTOR_SIZE 4
+#define ELEMENTS_PER_THREAD 8
+#else
+// Default configurations
+#define OPTIMAL_BLOCK_SIZE 256
+#define VECTOR_SIZE 4
+#define ELEMENTS_PER_THREAD 4
+#endif
