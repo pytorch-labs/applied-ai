@@ -71,10 +71,8 @@ class TestStochasticRounding(unittest.TestCase):
         tensor_size = 10000 # TODO - should be 10K
         x = torch.full((tensor_size,), value, device='cuda')
 
-
-
         # Debug prints
-        print(f"Input value: {value}")
+        print(f"\nInput value: {value}")
 
         # Single round test first
         single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
@@ -113,7 +111,7 @@ class TestStochasticRounding(unittest.TestCase):
         x = torch.full((tensor_size,), value, device='cuda')
 
         # Debug prints
-        print(f"Input value: {value}")
+        print(f"\nInput value: {value}")
 
         # Single round test first
         single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
@@ -139,8 +137,10 @@ class TestStochasticRounding(unittest.TestCase):
         self.assertTrue(abs(prob_up - expected_prob) < 0.03)
 
     def test_rounding_statistics_small(self):
-        """Test stochastic rounding for number < 1"""
+        """Test stochastic rounding for number between 0 and 1"""
         value = 0.7499847412109375  # Should round between 0.7480 and 0.7500
+
+        print(f"\nInput value: {value}")
         tensor_size = 10000
         x = torch.full((tensor_size,), value, device='cuda')
         torch.cuda.manual_seed(42)
@@ -163,8 +163,10 @@ class TestStochasticRounding(unittest.TestCase):
         self.assertTrue(abs(prob_up - expected_prob) < 0.03)
 
     def test_rounding_statistics_large(self):
-        """Test stochastic rounding for large number, ala > 100"""
+        """Test stochastic rounding for large number, over 100"""
         value = 128.99998474121094  # Should round between 128.875 and 129.000
+        # Debug prints
+        print(f"\nInput value: {value}")
         tensor_size = 10000
         x = torch.full((tensor_size,), value, device='cuda')
         torch.cuda.manual_seed(42)
