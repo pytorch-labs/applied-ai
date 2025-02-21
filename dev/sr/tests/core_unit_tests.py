@@ -64,12 +64,14 @@ class TestStochasticRounding(unittest.TestCase):
 
     def test_rounding_statistics(self):
         """Test if rounding probabilities match expected distribution"""
+        # Add seed for reproducibility
+        torch.cuda.manual_seed(42)
+
         value = 2.1999969482421875
         tensor_size = 10000 # TODO - should be 10K
         x = torch.full((tensor_size,), value, device='cuda')
 
-        # Add seed for reproducibility
-        torch.cuda.manual_seed(42)
+
 
         # Debug prints
         print(f"Input value: {value}")
@@ -89,7 +91,7 @@ class TestStochasticRounding(unittest.TestCase):
         upper_value = 2.2031
 
         prob_up = (results == upper_value).float().mean().item()
-        print(f"Probability of rounding up: {prob_up:.4f}")
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
 
         # Calculate expected probability based on input position
         distance_to_lower = abs(value - lower_value)
@@ -99,6 +101,91 @@ class TestStochasticRounding(unittest.TestCase):
 
         self.assertTrue(abs(prob_up - expected_prob) < 0.03)
 
+
+    def test_rounding_statistics_2(self):
+        """Test stochastic rounding with different BF16 boundary values"""
+        # Add seed for reproducibility
+        torch.cuda.manual_seed(42)
+        value = 1.7999992370605469
+        # debug if needed:
+        # print(f"Value bits: {torch.tensor(value).view(torch.int32).item():x}")
+        tensor_size = 10000
+        x = torch.full((tensor_size,), value, device='cuda')
+
+        # Debug prints
+        print(f"Input value: {value}")
+
+        # Single round test first
+        single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
+        unique_vals = torch.unique(single_result)
+        print(f"Possible rounded values: {unique_vals}")
+
+        rounds = 100
+        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
+        for i in range(rounds):
+            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
+
+        lower_value = 1.7969
+        upper_value = 1.8047
+
+        prob_up = (results == upper_value).float().mean().item()
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
+
+        distance_to_lower = abs(value - lower_value)
+        total_distance = upper_value - lower_value
+        expected_prob = distance_to_lower / total_distance
+        print(f"Expected probability: {expected_prob:.4f}")
+
+        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
+
+    def test_rounding_statistics_small(self):
+        """Test stochastic rounding for number < 1"""
+        value = 0.7499847412109375  # Should round between 0.7480 and 0.7500
+        tensor_size = 10000
+        x = torch.full((tensor_size,), value, device='cuda')
+        torch.cuda.manual_seed(42)
+
+        rounds = 100
+        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
+        for i in range(rounds):
+            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
+
+        lower_value = 0.7480
+        upper_value = 0.7500
+        prob_up = (results == upper_value).float().mean().item()
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
+
+        distance_to_lower = abs(value - lower_value)
+        total_distance = upper_value - lower_value
+        expected_prob = distance_to_lower / total_distance
+        print(f"Expected probability: {expected_prob:.4f}")
+
+        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
+
+    def test_rounding_statistics_large(self):
+        """Test stochastic rounding for large number, ala > 100"""
+        value = 128.99998474121094  # Should round between 128.875 and 129.000
+        tensor_size = 10000
+        x = torch.full((tensor_size,), value, device='cuda')
+        torch.cuda.manual_seed(42)
+
+        rounds = 100
+        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
+        for i in range(rounds):
+            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
+
+        lower_value = 128.875
+        upper_value = 129.000
+        prob_up = (results == upper_value).float().mean().item()
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
+
+
+        distance_to_lower = abs(value - lower_value)
+        total_distance = upper_value - lower_value
+        expected_prob = distance_to_lower / total_distance
+        print(f"Expected probability: {expected_prob:.4f}")
+
+        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
 
 
 
