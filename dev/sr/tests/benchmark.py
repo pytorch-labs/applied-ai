@@ -24,36 +24,40 @@ def measure_performance(func, input_tensor, warmup=10, repeats=100):
     elements_per_second = input_tensor.numel() / avg_time
     return avg_time, elements_per_second
 
-def benchmark_sizes(sizes=[1000, 10000, 100000, 1000000, 10000000]):
+def benchmark_sizes(sizes=[1000, 10000, 100000, 1000000, 10000000, (10000000*7), (10000000*10), (10000000*100), (10000000*1000),]):
+
     """Benchmark different input sizes"""
     results = []
 
     for size in sizes:
-        # Create input tensor
         x = torch.randn(size, device='cuda')
+
+        formatted_size = f"{size:,}"
 
         # Measure stochastic rounding
         time_stoch, throughput_stoch = measure_performance(
             stochastic_rounding_cuda.stochastic_round_bf16, x)
 
-        # Measure regular BF16 casting
+        # Measure regular casting
         time_regular, throughput_regular = measure_performance(
             lambda t: t.to(torch.bfloat16), x)
 
         results.append([
-            size,
-            time_stoch * 1000,  # convert to ms
-            throughput_stoch / 1e9,  # convert to GElements/s
-            time_regular * 1000,
-            throughput_regular / 1e9,
-            throughput_regular / throughput_stoch  # speedup
+            formatted_size,
+            time_stoch * 1000,  # ms
+            throughput_stoch / 1e6,  # ME/s  # Changed from 1e9
+            time_regular * 1000,  # ms
+            throughput_regular / 1e6,  # ME/s  # Changed from 1e9
+            throughput_stoch / throughput_regular
         ])
 
-    print("\nSize Comparison:")
     print(tabulate(results,
-                  headers=['Size', 'Stoch Time (ms)', 'Stoch GE/s',
-                          'Regular Time (ms)', 'Regular GE/s', 'Casting faster by'],
-                  floatfmt='.3f'))
+                headers=['Size', 'SR Time (ms)', 'SR ME/s',  # Changed from GE/s
+                        'Cast Time (ms)', 'Cast ME/s',  # Changed from GE/s
+                        'SR faster by'],
+                floatfmt='.3f'))
+
+
 
 def benchmark_shapes(total_size=1000000):
     """Benchmark different tensor shapes with same total size"""
