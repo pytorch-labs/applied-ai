@@ -32,7 +32,7 @@ public:
 private:
     uint2 key;
     uint4 counter;
-    static __device__ __forceinline__ uint2 mulhilo32_v2(const unsigned int a, const unsigned int b);
+    static __device__ __forceinline__ uint2 mulhilo32(const unsigned int a, const unsigned int b);
     static __device__ __forceinline__ uint4 single_round(const uint4 ctr, const uint2 key);
 };
 

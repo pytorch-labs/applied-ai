@@ -2,6 +2,8 @@
 #include <cstdint>
 
 // Philox RNG implementation
+// PTX based upon https://github.com/NVIDIA/apex/blob/master/apex/contrib/csrc/multihead_attn/philox.cuh
+
 __device__ __forceinline__ Philox::Philox() : key(make_uint2(0, 0)), counter(make_uint4(0, 0, 0, 0)) {}
 
 __device__ __forceinline__ void Philox::init(const unsigned long long seed, const unsigned int thread_id) {
@@ -10,7 +12,7 @@ __device__ __forceinline__ void Philox::init(const unsigned long long seed, cons
     __threadfence_block();
 }
 
-__device__ __forceinline__ uint2 Philox::mulhilo32_v2(const unsigned int a, const unsigned int b) {
+__device__ __forceinline__ uint2 Philox::mulhilo32(const unsigned int a, const unsigned int b) {
     unsigned long long tmp;
     asm ("mul.wide.u32 %0, %1, %2;\n\t"
          : "=l"(tmp)
@@ -20,8 +22,8 @@ __device__ __forceinline__ uint2 Philox::mulhilo32_v2(const unsigned int a, cons
 
 __device__ __forceinline__ uint4 Philox::single_round(const uint4 ctr, const uint2 key) {
     using namespace philox_constants;
-    const uint2 res0 = mulhilo32_v2(PHILOX_M0, ctr.x);
-    const uint2 res1 = mulhilo32_v2(PHILOX_M1, ctr.z);
+    const uint2 res0 = mulhilo32(PHILOX_M0, ctr.x);
+    const uint2 res1 = mulhilo32(PHILOX_M1, ctr.z);
     return make_uint4(res1.y ^ ctr.y ^ key.x, res1.x,
                      res0.y ^ ctr.w ^ key.y, res0.x);
 }
