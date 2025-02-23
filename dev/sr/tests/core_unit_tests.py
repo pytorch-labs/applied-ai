@@ -11,6 +11,32 @@ class TestStochasticRounding(unittest.TestCase):
         torch.manual_seed(42)
         np.random.seed(42)
 
+    def _test_rounding_statistics_helper(self, value, lower_value, upper_value, tensor_size=10000, rounds=100):
+        """Helper method for testing stochastic rounding statistics"""
+        print(f"\nInput value: {value}")
+        MAX_VARIANCE = 0.03
+        x = torch.full((tensor_size,), value, device='cuda')
+        torch.cuda.manual_seed(42)
+
+        # Single round test - isolate and show the round up and round down values
+        single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
+        print(f"Possible rounded values: {torch.unique(single_result)}")
+
+        # Multiple rounds
+        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
+        for i in range(rounds):
+            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
+
+        prob_up = (results == upper_value).float().mean().item()
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
+
+        distance_to_lower = abs(value - lower_value)
+        total_distance = upper_value - lower_value
+        expected_prob = distance_to_lower / total_distance
+        print(f"Expected probability: {expected_prob:.4f}")
+
+        self.assertTrue(abs(prob_up - expected_prob) < MAX_VARIANCE)
+
     def test_special_values(self):
         """Test handling of special values like inf, -inf, nan"""
         special_values = torch.tensor([float('inf'), float('-inf'), float('nan'), 0.0, -0.0],
@@ -60,134 +86,21 @@ class TestStochasticRounding(unittest.TestCase):
         # Values should be preserved approximately in BF16 range
         self.assertTrue(torch.all(torch.isfinite(rounded)))
 
-
-
     def test_rounding_statistics(self):
         """Test if rounding probabilities match expected distribution"""
-        # Add seed for reproducibility
-        torch.cuda.manual_seed(42)
-
-        value = 2.1999969482421875
-        tensor_size = 10000 # TODO - should be 10K
-        x = torch.full((tensor_size,), value, device='cuda')
-
-        # Debug prints
-        print(f"\nInput value: {value}")
-
-        # Single round test first
-        single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
-        unique_vals = torch.unique(single_result)
-        print(f"Possible rounded values: {unique_vals}")
-
-        # Multiple rounds
-        rounds = 100
-        results = torch.empty((rounds, tensor_size), device='cuda', dtype = torch.bfloat16)
-        for i in range(rounds):
-            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
-
-        lower_value = 2.1875
-        upper_value = 2.2031
-
-        prob_up = (results == upper_value).float().mean().item()
-        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
-
-        # Calculate expected probability based on input position
-        distance_to_lower = abs(value - lower_value)
-        total_distance = upper_value - lower_value
-        expected_prob = distance_to_lower / total_distance
-        print(f"Expected probability: {expected_prob:.4f}")
-
-        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
-
+        self._test_rounding_statistics_helper(2.1999969482421875, 2.1875, 2.2031)
 
     def test_rounding_statistics_2(self):
         """Test stochastic rounding with different BF16 boundary values"""
-        # Add seed for reproducibility
-        torch.cuda.manual_seed(42)
-        value = 1.7999992370605469
-        # debug if needed:
-        # print(f"Value bits: {torch.tensor(value).view(torch.int32).item():x}")
-        tensor_size = 10000
-        x = torch.full((tensor_size,), value, device='cuda')
-
-        # Debug prints
-        print(f"\nInput value: {value}")
-
-        # Single round test first
-        single_result = stochastic_rounding_cuda.stochastic_round_bf16(x)
-        unique_vals = torch.unique(single_result)
-        print(f"Possible rounded values: {unique_vals}")
-
-        rounds = 100
-        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
-        for i in range(rounds):
-            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
-
-        lower_value = 1.7969
-        upper_value = 1.8047
-
-        prob_up = (results == upper_value).float().mean().item()
-        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
-
-        distance_to_lower = abs(value - lower_value)
-        total_distance = upper_value - lower_value
-        expected_prob = distance_to_lower / total_distance
-        print(f"Expected probability: {expected_prob:.4f}")
-
-        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
+        self._test_rounding_statistics_helper(1.7999992370605469, 1.7969, 1.8047)
 
     def test_rounding_statistics_small(self):
         """Test stochastic rounding for number between 0 and 1"""
-        value = 0.7499847412109375  # Should round between 0.7480 and 0.7500
-
-        print(f"\nInput value: {value}")
-        tensor_size = 10000
-        x = torch.full((tensor_size,), value, device='cuda')
-        torch.cuda.manual_seed(42)
-
-        rounds = 100
-        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
-        for i in range(rounds):
-            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
-
-        lower_value = 0.7480
-        upper_value = 0.7500
-        prob_up = (results == upper_value).float().mean().item()
-        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
-
-        distance_to_lower = abs(value - lower_value)
-        total_distance = upper_value - lower_value
-        expected_prob = distance_to_lower / total_distance
-        print(f"Expected probability: {expected_prob:.4f}")
-
-        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
+        self._test_rounding_statistics_helper(0.7499847412109375, 0.7480, 0.7500)
 
     def test_rounding_statistics_large(self):
         """Test stochastic rounding for large number, over 100"""
-        value = 128.99998474121094  # Should round between 128.875 and 129.000
-        # Debug prints
-        print(f"\nInput value: {value}")
-        tensor_size = 10000
-        x = torch.full((tensor_size,), value, device='cuda')
-        torch.cuda.manual_seed(42)
-
-        rounds = 100
-        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.bfloat16)
-        for i in range(rounds):
-            results[i] = stochastic_rounding_cuda.stochastic_round_bf16(x)
-
-        lower_value = 128.875
-        upper_value = 129.000
-        prob_up = (results == upper_value).float().mean().item()
-        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
-
-
-        distance_to_lower = abs(value - lower_value)
-        total_distance = upper_value - lower_value
-        expected_prob = distance_to_lower / total_distance
-        print(f"Expected probability: {expected_prob:.4f}")
-
-        self.assertTrue(abs(prob_up - expected_prob) < 0.03)
+        self._test_rounding_statistics_helper(128.99998474121094, 128.875, 129.000)
 
 
 
