@@ -5,7 +5,7 @@ import time
 from tabulate import tabulate
 import argparse
 
-def measure_performance(func, input_tensor, warmup=10, repeats=100):
+def measure_performance(func, input_tensor, warmup=0, repeats=1):
     """Measure performance of a function with proper CUDA synchronization"""
     # Warmup
     for _ in range(warmup):
@@ -24,7 +24,8 @@ def measure_performance(func, input_tensor, warmup=10, repeats=100):
     elements_per_second = input_tensor.numel() / avg_time
     return avg_time, elements_per_second
 
-def benchmark_sizes(sizes=[1000, 10000, 100000, 1000000, 10000000]):
+def benchmark_sizes(sizes= [1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
+    #[ 50,000,000]): #
     """Benchmark different input sizes"""
     results = []
 
@@ -43,16 +44,16 @@ def benchmark_sizes(sizes=[1000, 10000, 100000, 1000000, 10000000]):
         results.append([
             size,
             time_stoch * 1000,  # convert to ms
-            throughput_stoch / 1e9,  # convert to GElements/s
+            throughput_stoch / 1e6,  # convert to GElements/s
             time_regular * 1000,
-            throughput_regular / 1e9,
+            throughput_regular / 1e6,
             throughput_regular / throughput_stoch  # speedup
         ])
 
     print("\nSize Comparison:")
     print(tabulate(results,
-                  headers=['Size', 'Stoch Time (ms)', 'Stoch GE/s',
-                          'Regular Time (ms)', 'Regular GE/s', 'Casting faster by'],
+                  headers=['Size', 'Stoch Time (ms)', 'Stoch ME/s',
+                          'Regular Time (ms)', 'Regular ME/s', 'Casting faster by'],
                   floatfmt='.3f'))
 
 def benchmark_shapes(total_size=1000000):
