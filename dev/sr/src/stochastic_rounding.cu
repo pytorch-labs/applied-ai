@@ -27,7 +27,7 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad
                           (elements_per_thread * threads_per_block);
 
     // Ensure at least 2 blocks per SM
-    const int blocks_per_sm = 2;
+    const int blocks_per_sm = 4;
     const int min_blocks_for_sms = prop.multiProcessorCount * blocks_per_sm;
 
     // Use maximum of calculated blocks and minimum blocks per SM
