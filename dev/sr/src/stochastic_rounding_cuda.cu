@@ -2,58 +2,60 @@
 #include <cstdint>
 
 // Philox RNG implementation
-// PTX based upon https://github.com/NVIDIA/apex/blob/master/apex/contrib/csrc/multihead_attn/philox.cuh
 
-__device__ __forceinline__ Philox::Philox() : key(make_uint2(0, 0)), counter(make_uint4(0, 0, 0, 0)) {}
+__device__ __forceinline__ PhiloxGenerator::PhiloxGenerator() :
+    key(make_uint2(0, 0)),
+    counter(make_uint4(0, 0, 0, 0)) {}
 
-__device__ __forceinline__ void Philox::init(const unsigned long long seed, const unsigned int thread_id) {
-    key = *reinterpret_cast<const uint2*>(&seed);
+__device__ __forceinline__ void PhiloxGenerator::init(const unsigned long long seed, const unsigned int thread_id) {
+    key.x = static_cast<unsigned int>(seed);
+    key.y = static_cast<unsigned int>(seed >> 32);
     counter = make_uint4(thread_id, 0, 0, 0);
     __threadfence_block();
 }
 
-__device__ __forceinline__ uint2 Philox::mulhilo32(const unsigned int a, const unsigned int b) {
-    unsigned long long tmp;
-    asm ("mul.wide.u32 %0, %1, %2;\n\t"
-         : "=l"(tmp)
-         : "r"(a), "r"(b));
-    return *reinterpret_cast<uint2*>(&tmp);
+__device__ __forceinline__ uint2 PhiloxGenerator::mulhilo(const unsigned int a, const unsigned int b) {
+    uint2 result;
+    unsigned long long prod;
+    asm("mul.wide.u32 %0, %1, %2;" : "=l"(prod) : "r"(a), "r"(b));
+    result.x = static_cast<unsigned int>(prod);
+    result.y = static_cast<unsigned int>(prod >> 32);
+    return result;
 }
 
-__device__ __forceinline__ uint4 Philox::single_round(const uint4 ctr, const uint2 key) {
-    using namespace philox_constants;
-    const uint2 res0 = mulhilo32(PHILOX_M0, ctr.x);
-    const uint2 res1 = mulhilo32(PHILOX_M1, ctr.z);
-    return make_uint4(res1.y ^ ctr.y ^ key.x, res1.x,
-                     res0.y ^ ctr.w ^ key.y, res0.x);
+__device__ __forceinline__ uint4 PhiloxGenerator::round(uint4 ctr, uint2 key) {
+    const uint2 mul0 = mulhilo(philox::M0, ctr.x);
+    const uint2 mul1 = mulhilo(philox::M1, ctr.z);
+
+    return make_uint4(
+        mul1.y ^ ctr.y ^ key.x,
+        mul1.x,
+        mul0.y ^ ctr.w ^ key.y,
+        mul0.x
+    );
 }
 
-__device__ __forceinline__ uint4 Philox::operator()() {
-    using namespace philox_constants;
-    uint4 counter_ = counter;
-    uint2 key_ = key;
+__device__ __forceinline__ uint4 PhiloxGenerator::next() {
+    uint4 ctr = counter;
+    uint2 k = key;
 
     #pragma unroll
-    for (int i = 0; i < 7; i++) {
-        counter_ = single_round(counter_, key_);
-        key_.x += PHILOX_W32_0;
-        key_.y += PHILOX_W32_1;
+    for (int i = 0; i < philox::ROUNDS; ++i) {
+        ctr = round(ctr, k);
+        k.x += philox::W32_0;
+        k.y += philox::W32_1;
     }
+
     counter.x += 4;
-    return counter_;
+    return ctr;
 }
 
-__device__ __forceinline__ __nv_bfloat16 float_to_bf16_stochastic(float value, uint32_t rand32) {
-    uint32_t value_bits = __float_as_uint(value);
-    uint32_t truncated = value_bits & 0xFFFF;
-    uint32_t rounded = value_bits & 0xFFFF0000u;
-
-    bool should_round_up = (rand32 & 0xFFFF) < truncated;
-    if (should_round_up) {
-        rounded += 0x10000;
-    }
-
-    return __float2bfloat16(__uint_as_float(rounded));
+__device__ __forceinline__ __nv_bfloat16 float_to_bf16_stochastic(const float value, const uint32_t rand) {
+    const uint32_t val_bits = __float_as_uint(value);
+    const uint32_t rounding_bits = val_bits & 0xFFFF;
+    uint32_t result = val_bits & 0xFFFF0000u;
+    result += (rand & 0xFFFF) < rounding_bits ? 0x10000u : 0;
+    return __float2bfloat16(__uint_as_float(result));
 }
 
 __device__ __forceinline__ void float4_to_bf16_stochastic(
@@ -76,8 +78,7 @@ __global__ void stochastic_round_bf16(
     const int size,
     const unsigned long long seed) {
 
-    // Initialize Philox RNG
-    Philox rng;
+    PhiloxGenerator rng;
     rng.init(seed, blockIdx.x * blockDim.x + threadIdx.x);
 
     int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
@@ -88,16 +89,10 @@ __global__ void stochastic_round_bf16(
 
     // Process full vectors of 4 elements
     for (; idx <= size - 4; idx += stride) {
-        // Load 4 consecutive float values
         values = *reinterpret_cast<float4*>(&input[idx]);
-
-        // Generate 4 random numbers using Philox
-        uint4 rand = rng();
-
-        // Convert and round all 4 values
+        uint4 rand = rng.next();
         float4_to_bf16_stochastic(values, rand, local_output);
 
-        // Store results
         for (int j = 0; j < 4; j++) {
             output[idx + j] = local_output[j];
         }
@@ -117,7 +112,7 @@ __global__ void stochastic_round_bf16(
         values.z = remaining_values[2];
         values.w = remaining_values[3];
 
-        uint4 rand = rng();
+        uint4 rand = rng.next();
         float4_to_bf16_stochastic(values, rand, local_output);
 
         for (int j = 0; j < remainder; j++) {
