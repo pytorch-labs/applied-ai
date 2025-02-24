@@ -58,9 +58,9 @@ class TestFP16StochasticRounding(unittest.TestCase):
                 counts[i] = (rounded == val).sum()
 
             # Check if distribution is roughly uniform
-            expected = num_samples / len(unique)
+            expected = float(num_samples) / len(unique)
             max_diff = torch.max(torch.abs(counts - expected))
-            self.assertLess(max_diff.item(), expected.item() * 0.1,
+            self.assertLess(max_diff.item(), expected * 0.1,
                           f"Failed at value {base_val}")
 
     def test_bias(self):

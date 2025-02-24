@@ -68,60 +68,44 @@ __device__ __forceinline__ __nv_bfloat16 float_to_bf16_stochastic(const float va
 
     return __float2bfloat16(__uint_as_float(rounded));
 }
-
+// ----- FP16 block ----------------------------------------------
 // FP16 stochastic rounding - 16 bits total, with 10 bits mantissa
 __device__ __forceinline__ __half float_to_fp16_stochastic(const float value, const uint32_t rand) {
-    // Handle special cases first
     if (!isfinite(value)) {
         return __float2half(value);
     }
 
     const uint32_t val_bits = __float_as_uint(value);
-    const uint32_t sign = val_bits & 0x80000000u;  // Extract sign bit
-    const uint32_t exp = (val_bits >> 23) & 0xFFu;  // Extract exponent
-    const uint32_t mant = val_bits & 0x7FFFFFu;     // Extract mantissa
+    const uint32_t sign = val_bits & 0x80000000u;
+    const uint32_t exp = (val_bits >> 23) & 0xFFu;
+    const uint32_t mant = val_bits & 0x7FFFFFu;
 
-    // Handle subnormals and exponent adjustment
     if (exp == 0) {
-        // Input is subnormal or zero
         return __float2half(value);
     }
 
-    // Adjust exponent bias from FP32 (127) to FP16 (15)
     const int new_exp = exp - 127 + 15;
 
     if (new_exp < 0) {
-        // Result would be subnormal in FP16
-        return __float2half(value);  // Let CUDA handle subnormal conversion
+        return __float2half(value);
     }
 
     if (new_exp > 31) {
-    // Would overflow FP16's exponent range
-    return __float2half(sign ? -INFINITY : INFINITY);
-}
+        return __float2half(sign ? -INFINITY : INFINITY);
+    }
 
-    // FP16 mantissa is 10 bits, so we need to round from 23 to 10 bits
+    // Keep 10 bits for mantissa, use remaining 13 bits for rounding
     const uint32_t mant_rounding_bits = mant & 0x1FFFu;  // Bottom 13 bits
-    const uint32_t mant_msb = mant >> 13;               // Top 10 bits
-
-    // Generate probability from the truncated bits
-    const uint32_t random = rand & 0x1FFFu;  // Use 13 bits of randomness
-
-    // Round up if random value is less than truncated bits
+    const uint32_t mant_msb = mant >> 13;                // Top 10 bits
+    const uint32_t random = rand & 0x1FFFu;              // Use 13 bits for random
     const uint32_t round_up = (random < mant_rounding_bits) ? 1u : 0u;
 
-    // Combine the pieces into FP16's bit pattern
-    // [15] sign bit
-    // [14:10] exponent (5 bits)
-    // [9:0] mantissa (10 bits)
-    const uint16_t h_bits = ((sign >> 16) & 0x8000u) |                 // Sign bit
-                           ((new_exp & 0x1Fu) << 10) |        // Exponent
-                           ((mant_msb + round_up) & 0x3FFu);  // Mantissa with rounding
+    const uint16_t h_bits = ((sign >> 16) & 0x8000u) |
+                           ((new_exp & 0x1Fu) << 10) |
+                           ((mant_msb + round_up) & 0x3FFu);
 
-    __half result;
-    __half_raw* raw_ptr = reinterpret_cast<__half_raw*>(&result);
-    raw_ptr->x = h_bits;
-    return result;
+    __half_raw raw{h_bits};
+    return reinterpret_cast<__half&>(raw);
 }
 
 __device__ __forceinline__ void float4_to_bf16_stochastic(
