@@ -6,7 +6,44 @@ class TestFP16StochasticRounding(unittest.TestCase):
     def setUp(self):
         self.device = torch.device('cuda')
         torch.cuda.manual_seed(42)
+    def _test_rounding_statistics_helper(self, value, lower_value, upper_value, tensor_size=10000, rounds=100, max_variance=0.03):
+        """Helper method for testing FP16 stochastic rounding statistics"""
+        print(f"\nInput value: {value}")
+        MAX_VARIANCE = max_variance
+        x = torch.full((tensor_size,), value, device='cuda')
+        torch.cuda.manual_seed(42)
 
+        # Single round test
+        single_result = stochastic_round_fp16(x)
+        print(f"Possible rounded values: {torch.unique(single_result)}")
+
+        # Multiple rounds
+        results = torch.empty((rounds, tensor_size), device='cuda', dtype=torch.float16)
+        for i in range(rounds):
+            results[i] = stochastic_round_fp16(x)
+
+        prob_up = (results == upper_value).float().mean().item()
+        print(f"Kernel's probability of rounding up: {prob_up:.4f}")
+
+        distance_to_lower = abs(value - lower_value)
+        total_distance = upper_value - lower_value
+        expected_prob = distance_to_lower / total_distance
+        print(f"Expected probability: {expected_prob:.4f}")
+
+        self.assertTrue(abs(prob_up - expected_prob) < MAX_VARIANCE)
+
+    def test_fp16_rounding_statistics(self):
+        """Test FP16 rounding between 1 and 2"""
+        self._test_rounding_statistics_helper(1.5000152587890625, 1.5, 1.5009765625)
+
+    def test_fp16_rounding_statistics_small(self):
+        """Test FP16 rounding for small values"""
+        self._test_rounding_statistics_helper(0.2500152587890625, 0.25, 0.250244140625)
+
+
+    def test_fp16_rounding_statistics_large(self):
+        """Test FP16 rounding for large values"""
+        self._test_rounding_statistics_helper(128.500152587890625, 128.5, 128.5625, max_variance=0.05)
     def test_rounding_distribution(self):
         # Test value between two representable FP16 values
         # 1.0 is exactly representable in FP16

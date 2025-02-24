@@ -9,7 +9,8 @@ __device__ __forceinline__ void PhiloxGenerator::init(uint64_t seed, uint32_t th
     key.x = static_cast<uint32_t>(seed);
     key.y = static_cast<uint32_t>(seed >> 32);
     counter = make_uint4(thread_id, 0, 0, 0);
-    __threadfence_block();
+    __syncthreads();
+    //__threadfence_block();
 }
 
 __device__ __forceinline__ uint2 PhiloxGenerator::mulhilo(const unsigned int a, const unsigned int b) {
@@ -70,6 +71,7 @@ __device__ __forceinline__ __nv_bfloat16 float_to_bf16_stochastic(const float va
 }
 // ----- FP16 block ----------------------------------------------
 // FP16 stochastic rounding - 16 bits total, with 10 bits mantissa
+// Improved FP16 stochastic rounding - 16 bits total, with 10 bits mantissa
 __device__ __forceinline__ __half float_to_fp16_stochastic(const float value, const uint32_t rand) {
     if (!isfinite(value)) {
         return __float2half(value);
@@ -85,24 +87,39 @@ __device__ __forceinline__ __half float_to_fp16_stochastic(const float value, co
     }
 
     const int new_exp = exp - 127 + 15;
-
     if (new_exp < 0) {
         return __float2half(value);
     }
-
     if (new_exp > 31) {
         return __float2half(sign ? -INFINITY : INFINITY);
     }
 
     // Keep 10 bits for mantissa, use remaining 13 bits for rounding
-    const uint32_t mant_rounding_bits = mant & 0x1FFFu;  // Bottom 13 bits
-    const uint32_t mant_msb = mant >> 13;                // Top 10 bits
-    const uint32_t random = rand & 0x1FFFu;              // Use 13 bits for random
-    const uint32_t round_up = (random < mant_rounding_bits) ? 1u : 0u;
+    const uint32_t mant_msb = mant >> 13;
+    const uint32_t mant_rounding_bits = mant & 0x1FFFu;
+    const uint32_t random = rand & 0x1FFFu;
+    // Scale probability for proper distribution
+    const uint32_t scaled_random = random >> 3;  // Scale to match FP16 precision
+    const uint32_t scaled_mant = mant_rounding_bits >> 3;
+    const uint32_t round_up = (scaled_random < scaled_mant) ? 1u : 0u;
+
+    //const uint32_t round_up = (random < mant_rounding_bits) ? 1u : 0u;
+
+    uint32_t final_mant = mant_msb + round_up;
+    uint32_t final_exp = new_exp;
+
+    if (final_mant > 0x3FFu) {
+        final_exp += 1;
+        final_mant = 0;
+    }
+
+    if (final_exp > 31) {
+        return __float2half(sign ? -INFINITY : INFINITY);
+    }
 
     const uint16_t h_bits = ((sign >> 16) & 0x8000u) |
-                           ((new_exp & 0x1Fu) << 10) |
-                           ((mant_msb + round_up) & 0x3FFu);
+                           ((final_exp & 0x1Fu) << 10) |
+                           (final_mant & 0x3FFu);
 
     __half_raw raw{h_bits};
     return reinterpret_cast<__half&>(raw);
