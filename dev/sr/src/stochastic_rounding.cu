@@ -1,5 +1,3 @@
-
-#include <pybind11/pybind11.h>
 #include "stochastic_rounding.hpp"
 #include <random>
 
@@ -11,7 +9,13 @@ __host__ int getOptimalBlockSize() {
     return std::min(prop.maxThreadsPerBlock, 256);
 }
 
-torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad) {
+template<typename T>
+torch::Tensor launch_stochastic_round(
+    torch::Tensor input,
+    bool requires_grad,
+    void (*kernel)(float*, T*, int, uint64_t),
+    torch::ScalarType dtype) {
+
     TORCH_CHECK(input.is_cuda(), "Input tensor must be on CUDA device");
     TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(input.scalar_type() == torch::kFloat32, "Input tensor must be float32");
@@ -30,19 +34,19 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad
     const int num_blocks = std::max(min_blocks, min_blocks_for_sms);
 
     auto options = torch::TensorOptions()
-                      .dtype(torch::kBFloat16)
+                      .dtype(dtype)
                       .device(input.device())
                       .requires_grad(requires_grad);
     auto output = torch::empty_like(input, options);
 
     std::random_device rd;
     std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<unsigned long long> dis;
-    const unsigned long long seed = dis(gen);
+    std::uniform_int_distribution<uint64_t> dis;
+    const uint64_t seed = dis(gen);
 
-    stochastic_round_bf16<<<num_blocks, threads_per_block>>>(
+    kernel<<<num_blocks, threads_per_block>>>(
         input.data_ptr<float>(),
-        reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
+        reinterpret_cast<T*>(output.data_ptr()),
         num_elements,
         seed);
 
@@ -53,10 +57,26 @@ torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad
     return output;
 }
 
+torch::Tensor stochastic_round_bf16_cuda(torch::Tensor input, bool requires_grad) {
+    return launch_stochastic_round<__nv_bfloat16>(
+        input, requires_grad, stochastic_round_bf16, torch::kBFloat16);
+}
+
+torch::Tensor stochastic_round_fp16_cuda(torch::Tensor input, bool requires_grad) {
+    return launch_stochastic_round<__half>(
+        input, requires_grad, stochastic_round_fp16, torch::kFloat16);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("stochastic_round_bf16",
           static_cast<torch::Tensor (*)(torch::Tensor, bool)>(&stochastic_round_bf16_cuda),
           "Stochastic rounding to BFloat16",
+          py::arg("input"),
+          py::arg("requires_grad") = false);
+
+    m.def("stochastic_round_fp16",
+          static_cast<torch::Tensor (*)(torch::Tensor, bool)>(&stochastic_round_fp16_cuda),
+          "Stochastic rounding to Float16",
           py::arg("input"),
           py::arg("requires_grad") = false);
 }
