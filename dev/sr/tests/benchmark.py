@@ -1,5 +1,6 @@
 import torch
 import stochastic_rounding_cuda
+from stochastic_rounding_cuda import stochastic_round_fp16
 import numpy as np
 import time
 from tabulate import tabulate
@@ -24,9 +25,9 @@ def measure_performance(func, input_tensor, warmup=0, repeats=1):
     elements_per_second = input_tensor.numel() / avg_time
     return avg_time, elements_per_second
 
-def benchmark_sizes(sizes= [1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
+"""def benchmark_sizes(sizes= [1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
     #[ 50,000,000]): #
-    """Benchmark different input sizes"""
+    #Benchmark different input sizes
     results = []
 
     for size in sizes:
@@ -55,6 +56,92 @@ def benchmark_sizes(sizes= [1000, 10000, 100000, 1000000, 10000000, (10000000*10
                   headers=['Size', 'Stoch Time (ms)', 'Stoch ME/s',
                           'Regular Time (ms)', 'Regular ME/s', 'Casting faster by'],
                   floatfmt='.3f'))
+
+
+def benchmark_sizes(sizes=[1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
+    #Benchmark different input sizes
+    results = []
+
+    for size in sizes:
+        x = torch.randn(size, device='cuda')
+
+        # BF16 measurements
+        time_bf16, throughput_bf16 = measure_performance(
+            stochastic_rounding_cuda.stochastic_round_bf16, x)
+
+        # FP16 measurements
+        time_fp16, throughput_fp16 = measure_performance(
+            stochastic_rounding_cuda.stochastic_round_fp16, x)
+
+        # Regular casting
+        time_regular, throughput_regular = measure_performance(
+            lambda t: t.to(torch.bfloat16), x)
+
+        results.append([
+            f"{size:,}",
+            time_bf16 * 1000,
+            throughput_bf16 / 1e6,
+            time_fp16 * 1000,
+            throughput_fp16 / 1e6,
+            time_regular * 1000,
+            throughput_regular / 1e6
+        ])
+
+    print("\nSize Comparison:")
+    print(tabulate(results,
+                  headers=['Size', 'BF16 Time (ms)', 'BF16 ME/s',
+                          'FP16 Time (ms)', 'FP16 ME/s',
+                          'Cast Time (ms)', 'Cast ME/s'],
+                  floatfmt='.3f'))
+"""
+def benchmark_bf16(sizes=[1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
+    results = []
+    for size in sizes:
+        x = torch.randn(size, device='cuda')
+        time_stoch, throughput_stoch = measure_performance(
+            stochastic_rounding_cuda.stochastic_round_bf16, x)
+        time_regular, throughput_regular = measure_performance(
+            lambda t: t.to(torch.bfloat16), x)
+
+        results.append([
+            f"{size:,}",
+            time_stoch * 1000,
+            throughput_stoch / 1e6,
+            time_regular * 1000,
+            throughput_regular / 1e6,
+            throughput_regular / throughput_stoch
+        ])
+
+    print("\nBF16 Size Comparison:")
+    print(tabulate(results,
+                  headers=['Size', 'SR Time (ms)', 'SR ME/s',
+                          'Cast Time (ms)', 'Cast ME/s', 'Cast faster by'],
+                  floatfmt='.3f'))
+
+def benchmark_fp16(sizes=[1000, 10000, 100000, 1000000, 10000000, (10000000*10), (10000000*100)]):
+    results = []
+    for size in sizes:
+        x = torch.randn(size, device='cuda')
+        time_stoch, throughput_stoch = measure_performance(
+            stochastic_rounding_cuda.stochastic_round_fp16, x)
+        time_regular, throughput_regular = measure_performance(
+            lambda t: t.to(torch.float16), x)
+
+        results.append([
+            f"{size:,}",
+            time_stoch * 1000,
+            throughput_stoch / 1e6,
+            time_regular * 1000,
+            throughput_regular / 1e6,
+            throughput_regular / throughput_stoch
+        ])
+
+    print("\nFP16 Size Comparison:")
+    print(tabulate(results,
+                  headers=['Size', 'SR Time (ms)', 'SR ME/s',
+                          'Cast Time (ms)', 'Cast ME/s', 'Cast faster by'],
+                  floatfmt='.3f'))
+
 
 def benchmark_shapes(total_size=1000000):
     """Benchmark different tensor shapes with same total size"""
@@ -140,9 +227,15 @@ def main():
     print(f"\nRunning on: {device.name}")
     print(f"Compute Capability: {device.major}.{device.minor}")
 
+    # Run sizes benchmark by default if no args specified
+    if not any(vars(args).values()):
+        benchmark_bf16()
+        benchmark_fp16()
+        return
 
     if args.all or args.sizes:
-        benchmark_sizes()
+        benchmark_bf16()
+        benchmark_fp16()
 
     if args.all or args.shapes:
         benchmark_shapes()

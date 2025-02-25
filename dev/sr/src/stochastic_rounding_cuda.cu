@@ -70,51 +70,54 @@ __device__ __forceinline__ __nv_bfloat16 float_to_bf16_stochastic(const float va
 }
 // ----- FP16 block ----------------------------------------------
 // FP16 stochastic rounding - 16 bits total, with 10 bits mantissa
-
+// Heavily commented b/c this one was tricky...
 __device__ __forceinline__ __half float_to_fp16_stochastic(const float value, const uint32_t rand) {
+    // Handle special cases first
     if (!isfinite(value)) {
         return __float2half(value);
     }
 
+    // Extract bits from float
     const uint32_t val_bits = __float_as_uint(value);
     const uint32_t sign = val_bits & 0x80000000u;
     const uint32_t exp = (val_bits >> 23) & 0xFFu;
     const uint32_t mant = val_bits & 0x7FFFFFu;
-    const uint32_t mant_msb = mant >> 13;
 
-    // do we need to scale by << 3?
-    const uint32_t mant_truncated = mant & 0x1FFFu;
-    const uint32_t random_bits = rand & 0x1FFFu;
+    // FP16 has 10-bit mantissa, FP32 has 23-bit mantissa
+    // For FP16 stochastic rounding, we use the lower 13 bits
+    const uint32_t mant_msb = mant >> 13;  // Top 10 bits for FP16 mantissa
+    const uint32_t mant_truncated = mant & 0x1FFFu;  // Lower 13 bits for stochastic rounding
 
-    printf("value: %f, mant: %x, trunc: %x, rand: %x, round_up: %d\n",
-           value, mant, mant_truncated, random_bits,
-           (random_bits < mant_truncated));
+    // Handle exponent conversion from FP32 to FP16...different bias
+    const int new_exp = exp - 127 + 15;  // Convert bias
 
-    if (exp == 0) {
-        return __float2half(value);
-    }
-
-    const int new_exp = exp - 127 + 15;
-    if (new_exp <= 0) {
+    // Handle special cases for exponent
+    if (exp == 0 || new_exp <= 0) {
+        // Denormal number or too small, use default conversion
         return __float2half(value);
     }
     if (new_exp > 31) {
+        // Too large, return infinity with correct sign
         return __float2half(sign ? -INFINITY : INFINITY);
     }
 
-    // FP16: 10-bit mantissa, use remaining 13 bits for rounding
+    // Generate random bits for stochastic rounding
+    // We compare with the 13 truncated bits to determine rounding
+    const uint32_t random_bits = rand & 0x1FFFu;
 
-
+    // Stochastic rounding: if random < truncated, round up
     const uint32_t round_up = (random_bits < mant_truncated) ? 1u : 0u;
 
+    // Assemble the FP16 bits
+    // Sign (1 bit) | Exponent (5 bits) | Mantissa (10 bits)
     const uint16_t h_bits = ((sign >> 16) & 0x8000u) |
                            ((new_exp & 0x1Fu) << 10) |
                            ((mant_msb + round_up) & 0x3FFu);
 
+    // Convert to half type
     __half_raw raw{h_bits};
     return *reinterpret_cast<__half*>(&raw);
 }
-
 
 __device__ __forceinline__ void float4_to_bf16_stochastic(
     const float4& values,
