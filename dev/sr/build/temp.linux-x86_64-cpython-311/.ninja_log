@@ -23,3 +23,14 @@
 9	38031	1740349024425819484	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
 9	37981	1740349398778267158	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
 9	37728	1740349508335689703	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
+0	33903	1740438823710149474	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+0	37971	1740438827776163538	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding.o	2e266ac627e9fc88
+17	33812	1740447461006701601	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+16	34005	1740447528492974648	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+9	33896	1740447647598479026	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+8	34528	1740447719541799739	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+9	41421	1740448351699734676	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+8	34095	1740448998733978487	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+10	34185	1740449289147256439	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+16	34490	1740449574512542190	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
+9	34568	1740449719672188236	/data/users/less/applied-ai/dev/sr/build/temp.linux-x86_64-cpython-311/src/stochastic_rounding_cuda.o	a0935ce4b779ec1a
