@@ -11,15 +11,16 @@ setup(
             'src/stochastic_rounding_cuda.cu'
         ],
         extra_compile_args={
-            'cxx': ['-O3'],
+            'cxx': ['-O3', '-march=native', '-ffast-math'],
             'nvcc': [
                 '-O3',
-                '--expt-relaxed-constexpr',  # better template support
-                #'-gencode=arch=compute_70,code=sm_70',  # Volta
-                #'-gencode=arch=compute_75,code=sm_75',  # Turing
-                #'-gencode=arch=compute_80,code=sm_80'   # Amper
-                #'-gencode=arch=compute_86,code=sm_86'   # Ampere
-                '-gencode=arch=compute_90,code=sm_90',  # Hopper
+                '--use_fast_math',
+                '--ptxas-options=-v',
+                '--maxrregcount=32',
+                '--restrict',
+                '--extra-device-vectorization',
+                '--expt-relaxed-constexpr',
+                '-gencode=arch=compute_90,code=sm_90',
             ]
         })
     ],

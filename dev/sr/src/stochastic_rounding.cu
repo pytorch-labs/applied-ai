@@ -20,18 +20,21 @@ torch::Tensor launch_stochastic_round(
     TORCH_CHECK(input.is_contiguous(), "Input tensor must be contiguous");
     TORCH_CHECK(input.scalar_type() == torch::kFloat32, "Input tensor must be float32");
 
-    const int threads_per_block = 256;
+    // Calc grid launch
+    const int threads_per_block = 256;  // Fixed size for better occupancy
     const int num_elements = input.numel();
-    const int elements_per_thread = 4;
+    const int elements_per_thread = 4;  // Vector size (float4)
 
-    const int min_blocks = (num_elements + elements_per_thread * threads_per_block - 1) /
-                          (elements_per_thread * threads_per_block);
+    // Calculate blocks based only on data size (rounded up)
+    const int data_blocks = (num_elements + elements_per_thread * threads_per_block - 1) /
+                            (elements_per_thread * threads_per_block);
 
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    const int blocks_per_sm = 4;
-    const int min_blocks_for_sms = prop.multiProcessorCount * blocks_per_sm;
-    const int num_blocks = std::max(min_blocks, min_blocks_for_sms);
+    // Ensure minimum number of blocks for good utilization on any GPU
+    // This is a fixed number that works well across different GPU architectures
+    const int min_blocks = 32;  // Should work well across different GPU generations
+
+    // Use maximum of calculated data blocks and minimum blocks
+    const int num_blocks = std::max(data_blocks, min_blocks);
 
     auto options = torch::TensorOptions()
                       .dtype(dtype)
