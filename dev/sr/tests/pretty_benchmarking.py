@@ -10,7 +10,7 @@ compiled_sr_bf16 = torch.compile(_fp32_to_bf16_sr, fullgraph=True, dynamic=False
 
 
 results = []
-sizes = [1000, 100000, 10000000, 50000000, 1000000000, 1009000000, 1050000000, ] # 2000000000,]#  3000000000] # , 10 ** 11, 10 ** 12, 10 ** 13,
+sizes = [1000, 100000, 10000000, 50000000, 1000000000, 1009000000, 1050000000, 2000000000, ]#  3000000000] # , 10 ** 11, 10 ** 12, 10 ** 13,
 for size in sizes:
     #size = (10 ** 10)*n
     x = torch.randn(size, device="cuda", dtype=torch.float32)

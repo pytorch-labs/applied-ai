@@ -31,10 +31,28 @@ torch::Tensor launch_stochastic_round(
 
     // Ensure minimum number of blocks for good utilization on any GPU
     // This is a fixed number that works well across different GPU architectures
-    const int min_blocks = 32;  // Should work well across different GPU generations
+     // Should work well across different GPU generations
 
-    // Use maximum of calculated data blocks and minimum blocks
-    const int num_blocks = std::max(data_blocks, min_blocks);
+    // Calculate optimal block count based on input size
+    //const int min_blocks = (num_elements > 1009000000) ? 2048 : 32;
+    //const int num_blocks = std::max(data_blocks, min_blocks);
+
+
+    // Dynamic launch strategy based on num elements size
+    int num_blocks;
+    if (num_elements < 1050000001) {  // Threshold on Hopper
+        // For small datasets, ensure minimum blocks for good GPU utilization
+        const int min_blocks = 32;
+        num_blocks = std::max(data_blocks, min_blocks);
+        // Print block launch info
+        //printf("Launching kernel with blocks=%d, threads_per_block=%d, num_elements=%d\n",
+        //    num_blocks, threads_per_block, num_elements);
+    }
+    else  {  // Huge tensor (1B+ elements)...max we can go w/o IMA
+        num_blocks = 135168;
+    }
+
+
 
     auto options = torch::TensorOptions()
                       .dtype(dtype)
