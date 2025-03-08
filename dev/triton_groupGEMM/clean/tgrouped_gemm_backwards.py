@@ -149,6 +149,7 @@ def _kernel_grouped_gemm_backward_x(
 
     M_end_offset = 0
     iterated_tiles = 0
+
     for g in tl.range(G):
         # Move across groups
         M_start_offset = M_end_offset
