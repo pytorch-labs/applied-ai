@@ -17,62 +17,17 @@ Input shape: torch.Size([1024, 256])
 Output shape: torch.Size([1024, 512])
 Expected output shape: [1024, 512]
 Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 259, in <module>
-    example_usage()
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 250, in example_usage
-    loss.backward()
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
-    torch.autograd.backward(
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 353, in backward
-    _engine_run_backward(
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
-    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 307, in apply
-    return user_fn(self, *args)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 123, in backward
-    grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 554, in grouped_gemm_backward
-    _kernel_grouped_gemm_backward_w[grid_w](
-  File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 189, in run
-    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 167, in _bench
-    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/testing.py", line 145, in do_bench
-    fn()
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 153, in kernel_call
-    self.fn.run(
-  File "/data/users/less/triton/python/triton/runtime/jit.py", line 563, in run
-    kernel = self.compile(src, target=target, options=options.__dict__)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 278, in compile
-    module = src.make_ir(options, codegen_fns, module_map, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 81, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 94:44:
-                    # Load x_t [K, M] for this group's portion
-                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(
-                        0, BLOCK_SIZE_N
-                    )  # K dimension
-                    offs_k = tl.arange(0, BLOCK_SIZE_K)  # M dimension (reduction)
+  File "/data/users/less/triton/python/triton/language/core.py", line 34, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/language/core.py", line 1814, in dot
+    return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/language/semantic.py", line 1566, in dot
+    assert lhs.shape[-1].value == rhs.shape[
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: First input shape (['constexpr[64]', 'constexpr[64]']) and second input shape ['constexpr[128]', 'constexpr[64]'] are not compatible for matmul (second index of first shape (64) must be equal to first index of second shape (128)
 
-                    n_mask = offs_n < K
-                    k_mask = offs_k < k_size
-
-                    x_t_block = tl.load(
-                        x_t_ptr
-                        + offs_n[None, :] * M  # Row stride is M
-                                            ^
-NameError('M is not defined')
 """
 
 # NVIDIA configurations only (FBGemm has AMD options...not yet here)
@@ -418,7 +373,7 @@ def _kernel_grouped_gemm_backward_w(
 
                     x_t_block = tl.load(
                         x_t_ptr
-                        + offs_n[None, :] * M  # Row stride is M
+                        + offs_n[None, :] * M_bucket  # Row stride is M
                         + (
                             M_start_offset + k_offset + offs_k[:, None]
                         ),  # Column offset to this group's M
