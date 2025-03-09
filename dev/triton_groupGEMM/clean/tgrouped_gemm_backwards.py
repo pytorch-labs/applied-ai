@@ -13,19 +13,35 @@ from tma_utils import TmaAutoTuneHelper
 from triton.runtime import driver
 
 """
-Current errors:
-2025-03-09 12:36:54,566 - INFO - Testing GMM Backward with G=1, M=64
-EFE2025-03-09 12:36:58,343 - INFO - Testing BF16 GMM with G=1, M=64
-2025-03-09 12:36:58,485 - INFO - Testing BF16 GMM with G=1, M=512
-2025-03-09 12:36:59,717 - INFO - Testing BF16 GMM with G=4, M=64
+TMA benchmarks will be running with experimental grid constant TMA descriptor.
+2025-03-09 13:24:26,980 - INFO - Testing GMM Backward with G=1, M=64, N=256
+EFE2025-03-09 13:24:43,463 - INFO - Testing BF16 GMM with G=1, M=64, N=256
+2025-03-09 13:24:43,620 - INFO - Forward pass test passed for G=1, M=64, N=256, K=256
+2025-03-09 13:24:43,620 - INFO - Testing BF16 GMM with G=1, M=128, N=256
+2025-03-09 13:24:48,091 - INFO - Forward pass test passed for G=1, M=128, N=256, K=256
+2025-03-09 13:24:48,091 - INFO - Testing BF16 GMM with G=4, M=64, N=256
 F
 ======================================================================
 ERROR: test_grouped_gemm_backward (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_backward)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 217, in test_grouped_gemm_backward
-    _test_grouped_gemm_backward((G, M, 256, 256), torch.device("cuda"))
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 171, in _test_grouped_gemm_backward
+  File "/data/users/less/triton/python/triton/language/core.py", line 34, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/language/core.py", line 1814, in dot
+    return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/language/semantic.py", line 1566, in dot
+    assert lhs.shape[-1].value == rhs.shape[
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: First input shape (['constexpr[32]', 'constexpr[64]']) and second input shape ['constexpr[32]', 'constexpr[64]'] are not compatible for matmul (second index of first shape (64) must be equal to first index of second shape (32)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 239, in test_grouped_gemm_backward
+    _test_grouped_gemm_backward((G, M, N, K), torch.device("cuda"))
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 190, in _test_grouped_gemm_backward
     result.backward(grad_output)
   File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
     torch.autograd.backward(
@@ -37,11 +53,11 @@ Traceback (most recent call last):
   File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 307, in apply
     return user_fn(self, *args)
            ^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 53, in backward
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 59, in backward
     grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 580, in grouped_gemm_backward
-    _kernel_grouped_gemm_backward_x[grid_x](
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 589, in grouped_gemm_backward
+    _kernel_grouped_gemm_backward_w[grid_w](
   File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
     return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -64,34 +80,33 @@ Traceback (most recent call last):
   File "/data/users/less/triton/python/triton/compiler/compiler.py", line 81, in make_ir
     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.UnsupportedLanguageConstruct: at 51:12:
-    M_end_offset = 0
-    iterated_tiles = 0
+triton.compiler.errors.CompilationError: at 118:35:
+                    # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                    x_t_block = tl.load(
+                        x_t_ptr
+                        + offs_n[:, None] * M_bucket
+                        + (M_start_offset + k_offset + offs_k[None, :]),
+                        mask=n_mask[:, None] & k_mask[None, :],
+                        other=0.0,
+                    )
 
-    for g in range(G):
-        # For each group
-        M_start_offset = M_end_offset
-        m_size = tl.load(m_sizes + g)
-        M_end_offset = M_start_offset + m_size
-
-        # Skip empty groups
-        if m_size <= 0:
-            continue
-            ^
-unsupported AST node type: Continue
+                    # Matrix multiplication: (x_t_block.T @ grad_y_block.T).T
+                    # This computes a portion of x_t.T @ grad_y for the current tile
+                    accumulator += tl.dot(
+                                   ^
 
 ======================================================================
 ERROR: test_grouped_gemm_backward_numerical_gradient (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_backward_numerical_gradient)
 Test backward pass using numerical gradients for verification
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 330, in test_grouped_gemm_backward_numerical_gradient
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 354, in test_grouped_gemm_backward_numerical_gradient
     output_bf16 = GroupedGEMMFunction.apply(a_bf16, b_bf16, m_sizes)
                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 575, in apply
     return super().apply(*args, **kwargs)  # type: ignore[misc]
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 40, in forward
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 43, in forward
     output = grouped_gemm(x, w, m_sizes)
              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/data/users/less/applied-ai/dev/triton_groupGEMM/groupgemm.py", line 521, in grouped_gemm
@@ -112,9 +127,9 @@ FAIL: test_grouped_gemm_backward_nontrivial_groups (unit_tests_back.TestGroupedG
 Test backward pass with specific non-trivial group sizes
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 291, in test_grouped_gemm_backward_nontrivial_groups
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 316, in test_grouped_gemm_backward_nontrivial_groups
     _test_grouped_gemm_backward_custom_groups(
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 256, in _test_grouped_gemm_backward_custom_groups
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 279, in _test_grouped_gemm_backward_custom_groups
     self.assertEqual(
 AssertionError: torch.Size([128, 64]) != (128, 256) : Forward result shape mismatch, expected (128, 256), got torch.Size([128, 64])
 
@@ -122,19 +137,19 @@ AssertionError: torch.Size([128, 64]) != (128, 256) : Forward result shape misma
 FAIL: test_grouped_gemm_bf16 (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_bf16)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 118, in test_grouped_gemm_bf16
-    _test_grouped_gemm_bf16((G, M, 256, 256), torch.device("cuda"))
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 94, in _test_grouped_gemm_bf16
-    self.assertEqual(result.shape, (M, N * G))
-AssertionError: torch.Size([64, 256]) != (64, 1024)
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 136, in test_grouped_gemm_bf16
+    _test_grouped_gemm_bf16((G, M, N, K), torch.device("cuda"))
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 101, in _test_grouped_gemm_bf16
+    self.assertEqual(
+AssertionError: torch.Size([64, 256]) != torch.Size([64, 1024]) : Output shape mismatch: got torch.Size([64, 256]), expected torch.Size([64, 1024])
 
 ----------------------------------------------------------------------
-Ran 4 tests in 6.378s
+Ran 4 tests in 22.401s
 
 FAILED (failures=2, errors=2)
 """
 
-# NVIDIA configurations - with balanced block sizes for H100
+# NVIDIA configurations - block sizes for H100
 _CONFIGS = [
     triton.Config(
         {
@@ -199,14 +214,6 @@ def early_config_prune(configs, name_args, **kwargs):
         ]
         required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
         if required_shared_memory > max_shared_memory:
-            continue
-
-        # Check K dimension alignment - critical for performance
-        if K % BLOCK_K != 0 and K > BLOCK_K:
-            continue
-
-        # Check if N dimension is suitable for the block size
-        if N % BLOCK_N != 0 and N > BLOCK_N * 2:
             continue
 
         # Add this config to our pruned list
@@ -277,117 +284,117 @@ def _kernel_grouped_gemm_backward_w(
     M_end_offset = 0
     iterated_tiles = 0
 
-    for g in range(G):
+    for g in tl.range(G):
         # For each group
         M_start_offset = M_end_offset
         m_size = tl.load(m_sizes + g)
         M_end_offset = M_start_offset + m_size
 
-        # Skip empty groups
-        if m_size <= 0:
-            continue
+        # Only process if m_size > 0
+        if m_size > 0:
+            # N_start_offset is where this group's weights start in the N*G dimension
+            N_start_offset = g * N
 
-        # N_start_offset is where this group's weights start in the N*G dimension
-        N_start_offset = g * N
+            # Calculate tiles for this group
+            num_m_tiles = tl.cdiv(N, BLOCK_SIZE_M)  # Tiles along N dimension
+            num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # Tiles along K dimension
+            num_tiles = num_m_tiles * num_n_tiles
 
-        # Calculate tiles for this group
-        num_m_tiles = tl.cdiv(N, BLOCK_SIZE_M)  # Tiles along N dimension
-        num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # Tiles along K dimension
-        num_tiles = num_m_tiles * num_n_tiles
-
-        # Setup TMA descriptor for output if using TMA
-        if USE_TMA_STORE:
-            tl.static_assert(hasattr(tl.extra, "cuda"), "TMA requires CUDA support")
-            tl.extra.cuda.experimental_device_tensormap_create2d(
-                desc_ptr=c_desc_ptr,
-                global_address=grad_w_ptr + N_start_offset * K,
-                load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-                global_size=[N, K],
-                element_ty=dtype,
-            )
-            tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
-
-        # Process tiles
-        while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-            gidx = tidx - iterated_tiles
-
-            # Calculate tile indices
-            tile_m_idx = gidx % num_m_tiles  # Tile index along N dimension
-            tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
-
-            # Initialize accumulator for this tile
-            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-            # Calculate offsets for better memory access
-            offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-            offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-            # Create masks for boundary checking
-            m_mask = offs_m < N
-            n_mask = offs_n < K
-
-            # Loop over the reduction dimension (M)
-            for k_offset in range(0, m_size, BLOCK_SIZE_K):
-                # Handle boundary conditions for the reduction dimension
-                k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
-                offs_k = tl.arange(0, BLOCK_SIZE_K)
-                k_mask = offs_k < k_size
-
-                # Load grad_y [M, N*G] block
-                # Shape: [BLOCK_SIZE_K, BLOCK_SIZE_M]
-                grad_y_block = tl.load(
-                    grad_y_ptr
-                    + (M_start_offset + k_offset + offs_k[:, None]) * (N * G)
-                    + (N_start_offset + offs_m[None, :]),
-                    mask=k_mask[:, None] & m_mask[None, :],
-                    other=0.0,
-                )
-
-                # Load x_t [K, M] block
-                # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
-                x_t_block = tl.load(
-                    x_t_ptr
-                    + offs_n[:, None] * M_bucket
-                    + (M_start_offset + k_offset + offs_k[None, :]),
-                    mask=n_mask[:, None] & k_mask[None, :],
-                    other=0.0,
-                )
-
-                # Matrix multiplication: (x_t_block.T @ grad_y_block.T).T
-                # This computes a portion of x_t.T @ grad_y for the current tile
-                accumulator += tl.dot(
-                    x_t_block.to(tl.float32).T,
-                    grad_y_block.to(tl.float32),
-                    allow_tf32=True,
-                ).T
-
-            # Store result to grad_w
+            # Setup TMA descriptor for output if using TMA
             if USE_TMA_STORE:
-                # Use TMA to store the result
-                m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
-
-                # Convert to output dtype and store
-                tl._experimental_descriptor_store(
-                    c_desc_ptr,
-                    accumulator.to(dtype),
-                    [m_offset, n_offset],
+                tl.extra.cuda.experimental_device_tensormap_create2d(
+                    desc_ptr=c_desc_ptr,
+                    global_address=grad_w_ptr + N_start_offset * K,
+                    load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+                    global_size=[N, K],
+                    element_ty=dtype,
                 )
-            else:
-                # Manual store with boundary checking
-                tl.store(
-                    grad_w_ptr
-                    + (N_start_offset + offs_m[:, None]) * K
-                    + offs_n[None, :],
-                    accumulator.to(dtype),
-                    mask=m_mask[:, None] & n_mask[None, :],
-                )
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # Move to next tile
-            tidx += NUM_SMS
+            # Process tiles
+            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
+                gidx = tidx - iterated_tiles
 
-        # Update tiles processed counter
-        iterated_tiles += num_tiles
+                # Calculate tile indices
+                tile_m_idx = gidx % num_m_tiles  # Tile index along N dimension
+                tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
+
+                # Initialize accumulator for this tile
+                accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+                # Calculate offsets for better memory access
+                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
+                # Create masks for boundary checking
+                m_mask = offs_m < N
+                n_mask = offs_n < K
+
+                # Loop over the reduction dimension (M)
+                for k_offset in range(0, m_size, BLOCK_SIZE_K):
+                    # Handle boundary conditions for the reduction dimension
+                    k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
+                    offs_k = tl.arange(0, BLOCK_SIZE_K)
+                    k_mask = offs_k < k_size
+
+                    # Load grad_y [M, N*G] block
+                    # Shape: [BLOCK_SIZE_K, BLOCK_SIZE_M]
+                    grad_y_block = tl.load(
+                        grad_y_ptr
+                        + (M_start_offset + k_offset + offs_k[:, None]) * (N * G)
+                        + (N_start_offset + offs_m[None, :]),
+                        mask=k_mask[:, None] & m_mask[None, :],
+                        other=0.0,
+                    )
+
+                    # Load x_t [K, M] block
+                    # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                    x_t_block = tl.load(
+                        x_t_ptr
+                        + offs_n[:, None] * M_bucket
+                        + (M_start_offset + k_offset + offs_k[None, :]),
+                        mask=n_mask[:, None] & k_mask[None, :],
+                        other=0.0,
+                    )
+
+                    # Matrix multiplication: (x_t_block.T @ grad_y_block.T).T
+                    # This computes a portion of x_t.T @ grad_y for the current tile
+                    accumulator += tl.dot(
+                        x_t_block.to(tl.float32),
+                        grad_y_block.to(tl.float32).T,
+                        allow_tf32=True,
+                    )
+
+                # Store result to grad_w
+                if USE_TMA_STORE:
+                    # Use TMA to store the result
+                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
+                    # Convert to output dtype and store
+                    tl._experimental_descriptor_store(
+                        c_desc_ptr,
+                        accumulator.to(dtype),
+                        [m_offset, n_offset],
+                    )
+                else:
+                    # Manual store with boundary checking
+                    tl.store(
+                        grad_w_ptr
+                        + (N_start_offset + offs_m[:, None]) * K
+                        + offs_n[None, :],
+                        accumulator.to(dtype),
+                        mask=m_mask[:, None] & n_mask[None, :],
+                    )
+
+                # Move to next tile
+                tidx += NUM_SMS
+
+            # Update tiles processed counter
+            iterated_tiles += num_tiles
+        else:
+            # Skip this group if m_size <= 0
+            iterated_tiles += 0  # No tiles to process
 
 
 # ======= Backwards for inputs (d_X) ======================================
@@ -439,117 +446,118 @@ def _kernel_grouped_gemm_backward_x(
     M_end_offset = 0
     iterated_tiles = 0
 
-    for g in range(G):
+    for g in tl.range(G):
         # For each group
         M_start_offset = M_end_offset
         m_size = tl.load(m_sizes + g)
         M_end_offset = M_start_offset + m_size
 
-        # Skip empty groups
-        if m_size <= 0:
-            continue
+        # Only process if m_size > 0
+        if m_size > 0:
+            # N_start_offset is where this group's weights start in the N*G dimension
+            N_start_offset = g * N
 
-        # N_start_offset is where this group's weights start in the N*G dimension
-        N_start_offset = g * N
+            # Calculate tiles for this group
+            num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)  # Tiles along M dimension
+            num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # Tiles along K dimension
+            num_tiles = num_m_tiles * num_n_tiles
 
-        # Calculate tiles for this group
-        num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)  # Tiles along M dimension
-        num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # Tiles along K dimension
-        num_tiles = num_m_tiles * num_n_tiles
-
-        # Setup TMA descriptor for output if using TMA
-        if USE_TMA_STORE:
-            tl.static_assert(hasattr(tl.extra, "cuda"), "TMA requires CUDA support")
-            tl.extra.cuda.experimental_device_tensormap_create2d(
-                desc_ptr=c_desc_ptr,
-                global_address=grad_x_ptr + M_start_offset * K,
-                load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-                global_size=[m_size, K],
-                element_ty=dtype,
-            )
-            tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
-
-        # Process tiles
-        while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-            gidx = tidx - iterated_tiles
-
-            # Calculate tile indices
-            tile_m_idx = gidx % num_m_tiles  # Tile index along M dimension
-            tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
-
-            # Initialize accumulator for this tile
-            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-            # Calculate offsets for better memory access
-            offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-            offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-            # Create masks for boundary checking
-            m_mask = offs_m < m_size
-            n_mask = offs_n < K
-
-            # Loop over the reduction dimension (N)
-            for k_offset in range(0, N, BLOCK_SIZE_K):
-                # Handle boundary conditions for the reduction dimension
-                k_size = tl.minimum(BLOCK_SIZE_K, N - k_offset)
-                offs_k = tl.arange(0, BLOCK_SIZE_K)
-                k_mask = offs_k < k_size
-
-                # Load grad_y [M, N*G] block
-                # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                grad_y_block = tl.load(
-                    grad_y_ptr
-                    + (M_start_offset + offs_m[:, None]) * (N * G)
-                    + (N_start_offset + k_offset + offs_k[None, :]),
-                    mask=m_mask[:, None] & k_mask[None, :],
-                    other=0.0,
-                )
-
-                # Load w_t [K, N*G] block
-                # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
-                w_t_block = tl.load(
-                    w_t_ptr
-                    + offs_n[:, None] * (N * G)
-                    + (N_start_offset + k_offset + offs_k[None, :]),
-                    mask=n_mask[:, None] & k_mask[None, :],
-                    other=0.0,
-                )
-
-                # Matrix multiplication: grad_y @ w_t.T
-                # This computes a portion of grad_y @ w_t.T for the current tile
-                accumulator += tl.dot(
-                    grad_y_block.to(tl.float32),
-                    w_t_block.to(tl.float32).T,
-                    allow_tf32=True,
-                )
-
-            # Store result to grad_x
+            # Setup TMA descriptor for output if using TMA
             if USE_TMA_STORE:
-                # Use TMA to store the result
-                m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
 
-                # Convert to output dtype and store
-                tl._experimental_descriptor_store(
-                    c_desc_ptr,
-                    accumulator.to(dtype),
-                    [m_offset, n_offset],
+                tl.extra.cuda.experimental_device_tensormap_create2d(
+                    desc_ptr=c_desc_ptr,
+                    global_address=grad_x_ptr + M_start_offset * K,
+                    load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+                    global_size=[m_size, K],
+                    element_ty=dtype,
                 )
-            else:
-                # Manual store with boundary checking
-                tl.store(
-                    grad_x_ptr
-                    + (M_start_offset + offs_m[:, None]) * K
-                    + offs_n[None, :],
-                    accumulator.to(dtype),
-                    mask=m_mask[:, None] & n_mask[None, :],
-                )
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # Move to next tile
-            tidx += NUM_SMS
+            # Process tiles
+            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
+                gidx = tidx - iterated_tiles
 
-        # Update tiles processed counter
-        iterated_tiles += num_tiles
+                # Calculate tile indices
+                tile_m_idx = gidx % num_m_tiles  # Tile index along M dimension
+                tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
+
+                # Initialize accumulator for this tile
+                accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+                # Calculate offsets for better memory access
+                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
+                # Create masks for boundary checking
+                m_mask = offs_m < m_size
+                n_mask = offs_n < K
+
+                # Loop over the reduction dimension (N)
+                for k_offset in range(0, N, BLOCK_SIZE_K):
+                    # Handle boundary conditions for the reduction dimension
+                    k_size = tl.minimum(BLOCK_SIZE_K, N - k_offset)
+                    offs_k = tl.arange(0, BLOCK_SIZE_K)
+                    k_mask = offs_k < k_size
+
+                    # Load grad_y [M, N*G] block
+                    # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
+                    grad_y_block = tl.load(
+                        grad_y_ptr
+                        + (M_start_offset + offs_m[:, None]) * (N * G)
+                        + (N_start_offset + k_offset + offs_k[None, :]),
+                        mask=m_mask[:, None] & k_mask[None, :],
+                        other=0.0,
+                    )
+
+                    # Load w_t [K, N*G] block
+                    # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                    w_t_block = tl.load(
+                        w_t_ptr
+                        + offs_n[:, None] * (N * G)
+                        + (N_start_offset + k_offset + offs_k[None, :]),
+                        mask=n_mask[:, None] & k_mask[None, :],
+                        other=0.0,
+                    )
+
+                    # Matrix multiplication: grad_y @ w_t.T
+                    # This computes a portion of grad_y @ w_t.T for the current tile
+                    accumulator += tl.dot(
+                        grad_y_block.to(tl.float32),
+                        w_t_block.to(tl.float32).T,
+                        allow_tf32=True,
+                    )
+
+                # Store result to grad_x
+                if USE_TMA_STORE:
+                    # Use TMA to store the result
+                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
+                    # Convert to output dtype and store
+                    tl._experimental_descriptor_store(
+                        c_desc_ptr,
+                        accumulator.to(dtype),
+                        [m_offset, n_offset],
+                    )
+                else:
+                    # Manual store with boundary checking
+                    tl.store(
+                        grad_x_ptr
+                        + (M_start_offset + offs_m[:, None]) * K
+                        + offs_n[None, :],
+                        accumulator.to(dtype),
+                        mask=m_mask[:, None] & n_mask[None, :],
+                    )
+
+                # Move to next tile
+                tidx += NUM_SMS
+
+            # Update tiles processed counter
+            iterated_tiles += num_tiles
+        else:
+            # Skip this group if m_size <= 0
+            iterated_tiles += 0  # No tiles to process
 
 
 def grouped_gemm_backward(
