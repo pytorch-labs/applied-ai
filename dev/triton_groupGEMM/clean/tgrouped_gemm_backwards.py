@@ -227,17 +227,113 @@ def early_config_prune(configs, name_args, **kwargs):
     if not pruned_configs and configs:
         # Add the smallest configuration as a fallback
         smallest_config = min(
+def early_config_prune(configs, name_args, **kwargs):
+    """
+    Prune configurations based on hardware constraints and problem size.
+    Modified to ensure at least one configuration always passes through.
+
+    Args:
+        configs: List of triton configurations
+        name_args: Dictionary of kernel arguments
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        List of pruned configurations that should work well for the given problem
+    """
+    import torch
+    from triton.runtime import driver
+    import logging
+
+    # Log what's happening for debugging
+    logging.info(f"early_config_prune called with {len(configs)} configs")
+    logging.info(f"name_args keys: {list(name_args.keys())}")
+
+    device = torch.cuda.current_device()
+
+    # Get element size for the tensor we're computing gradients for
+    dtsize = 2  # Default to 2 bytes (for bfloat16)
+    if "grad_x_ptr" in name_args:
+        dtsize = name_args["grad_x_ptr"].element_size()
+    elif "grad_w_ptr" in name_args:
+        dtsize = name_args["grad_w_ptr"].element_size()
+    
+    logging.info(f"Using element size: {dtsize}")
+
+    # Check for required keys and use reasonable defaults if missing
+    G = name_args.get("G", 1)
+    M = name_args.get("M_bucket", 128)
+    N = name_args.get("N", 128)
+    K = name_args.get("K", 128)
+    
+    logging.info(f"Problem size: G={G}, M={M}, N={N}, K={K}")
+
+    # Get max shared memory
+    max_shared_memory = driver.active.utils.get_device_properties(device)["max_shared_mem"]
+    logging.info(f"Max shared memory: {max_shared_memory}")
+
+    pruned_configs = []
+
+    for config in configs:
+        kw = config.kwargs
+        BLOCK_M, BLOCK_N, BLOCK_K, num_stages = (
+            kw["BLOCK_SIZE_M"],
+            kw["BLOCK_SIZE_N"],
+            kw["BLOCK_SIZE_K"],
+            config.num_stages,
+        )
+        
+        # Calculate shared memory requirements
+        required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
+        
+        if required_shared_memory <= max_shared_memory:
+            pruned_configs.append(config)
+            logging.info(f"Config accepted: BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_K={BLOCK_K}, "
+                         f"num_stages={num_stages}, shared_mem={required_shared_memory}")
+        else:
+            logging.info(f"Config rejected: BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_K={BLOCK_K}, "
+                         f"num_stages={num_stages}, shared_mem={required_shared_memory}")
+
+    # If all configs were pruned, add the smallest one
+    if not pruned_configs and configs:
+        smallest_config = min(
             configs,
             key=lambda c: (
                 c.kwargs["BLOCK_SIZE_M"]
                 * c.kwargs["BLOCK_SIZE_N"]
                 * c.kwargs["BLOCK_SIZE_K"]
+                * c.num_stages
             ),
         )
+        
+        # Calculate its shared memory requirements 
+        BLOCK_M = smallest_config.kwargs["BLOCK_SIZE_M"]
+        BLOCK_N = smallest_config.kwargs["BLOCK_SIZE_N"] 
+        BLOCK_K = smallest_config.kwargs["BLOCK_SIZE_K"]
+        num_stages = smallest_config.num_stages
+        
+        sm_req = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
+        
+        # If it still doesn't fit, create an even smaller one that will fit
+        if sm_req > max_shared_memory:
+            from triton import Config
+            # Keep reducing until we find a configuration that fits
+            for bs in [16, 8, 4]:
+                sm_req = (bs + bs) * bs * 1 * dtsize
+                if sm_req <= max_shared_memory:
+                    logging.info(f"Creating minimal config with block size {bs}")
+                    smallest_config = Config(
+                        {"BLOCK_SIZE_M": bs, "BLOCK_SIZE_N": bs, "BLOCK_SIZE_K": bs},
+                        num_stages=1,
+                        num_warps=1,
+                        num_ctas=1
+                    )
+                    break
+        
         pruned_configs.append(smallest_config)
+        logging.info(f"Added smallest config as fallback: {smallest_config}")
 
+    logging.info(f"Returned {len(pruned_configs)} configs after pruning")
     return pruned_configs
-
 
 # ======= Backwards for weights (d_W) ======================================
 @triton.autotune(
