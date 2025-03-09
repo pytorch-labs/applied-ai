@@ -20,6 +20,249 @@ Output shape: torch.Size([1024, 512])
 Expected output shape: [1024, 512]
 Weight grad shape: torch.Size([512, 256])
 Expected weight grad shape: [512, 256]
+
+
+Unit tests:
+2025-03-09 10:58:51,406 - INFO - Testing GMM Backward with G=1, M=64
+python: /data/users/less/triton/lib/Dialect/TritonGPU/IR/LinearLayoutConversions.cpp:1154: mlir::triton::LinearLayout mlir::triton::gpu::{anonymous}::chooseStMatrixLayoutLeadingOffset(mlir::MLIRContext*, mlir::RankedTensorType, int): Assertion `instrN >= numColsPerChunk && "Each chunk is filled in with a single warp"' failed.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 4], order = [0, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [16, 32, 8]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @_kernel_grouped_gemm_backward_x(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<256> : tensor<64x1xi32, #blocked>
+    %cst_0 = arith.constant dense<256> : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c132_i32 = arith.constant 132 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c63_i32 = arith.constant 63 : i32
+    %cst_1 = arith.constant dense<0> : tensor<64x64xi8, #blocked>
+    %c512_i64 = arith.constant 512 : i64
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c128_i32 : i32
+    %2 = tt.addptr %arg3, %1 : !tt.ptr<i8>, i32
+    %3 = tt.load %arg4 : !tt.ptr<i32>
+    %4 = arith.cmpi sgt, %3, %c0_i32 : i32
+    scf.if %4 {
+      %5 = arith.addi %3, %c63_i32 : i32
+      %6 = arith.divsi %5, %c64_i32 : i32
+      %7 = arith.muli %6, %c4_i32 : i32
+      tt.experimental_tensormap_create %2, %arg2, [%c64_i32, %c64_i32], [%c256_i32, %3], [%c512_i64], [%c1_i32, %c1_i32] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<bf16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+      tt.experimental_tensormap_fenceproxy_acquire %2 : !tt.ptr<i8>
+      %8 = ttg.local_alloc  : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+      %9 = scf.for %arg5 = %c0_i32 to %7 step %c132_i32 iter_args(%arg6 = %0) -> (i32)  : i32 {
+        %10 = arith.cmpi slt, %arg5, %7 : i32
+        %11 = arith.addi %arg5, %c132_i32 : i32
+        %12 = arith.cmpi slt, %arg6, %11 : i32
+        %13 = arith.cmpi sge, %arg6, %arg5 : i32
+        %14 = arith.andi %12, %13 : i1
+        %15 = arith.andi %10, %14 : i1
+        scf.if %15 {
+          %17 = arith.remsi %arg6, %6 : i32
+          %18 = arith.divsi %arg6, %6 : i32
+          %19 = arith.muli %17, %c64_i32 : i32
+          %20 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %21 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+          %22 = tt.splat %19 : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %23 = arith.addi %22, %20 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %24 = arith.muli %18, %c64_i32 : i32
+          %25 = tt.splat %24 : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %26 = arith.addi %25, %20 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %27 = tt.splat %3 : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %28 = arith.cmpi slt, %23, %27 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %29 = arith.cmpi slt, %26, %cst_0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+          %30 = tt.expand_dims %28 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi1, #blocked>
+          %31 = tt.broadcast %30 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
+          %32 = tt.expand_dims %23 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+          %33 = arith.muli %32, %cst : tensor<64x1xi32, #blocked>
+          %34 = tt.splat %arg0 : !tt.ptr<i8, 0> -> tensor<64x1x!tt.ptr<i8, 0>, #blocked>
+          %35 = tt.addptr %34, %33 : tensor<64x1x!tt.ptr<i8, 0>, #blocked>, tensor<64x1xi32, #blocked>
+          %36 = tt.expand_dims %21 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+          %37 = arith.extsi %36 : tensor<1x64xi32, #blocked> to tensor<1x64xi64, #blocked>
+          %38 = tt.broadcast %35 : tensor<64x1x!tt.ptr<i8, 0>, #blocked> -> tensor<64x64x!tt.ptr<i8, 0>, #blocked>
+          %39 = tt.expand_dims %29 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi1, #blocked>
+          %40 = tt.broadcast %39 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
+          %41 = tt.expand_dims %26 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+          %42 = arith.muli %41, %cst : tensor<64x1xi32, #blocked>
+          %43 = tt.splat %arg1 : !tt.ptr<i8, 0> -> tensor<64x1x!tt.ptr<i8, 0>, #blocked>
+          %44 = tt.addptr %43, %42 : tensor<64x1x!tt.ptr<i8, 0>, #blocked>, tensor<64x1xi32, #blocked>
+          %45 = tt.broadcast %44 : tensor<64x1x!tt.ptr<i8, 0>, #blocked> -> tensor<64x64x!tt.ptr<i8, 0>, #blocked>
+          %46 = scf.for %arg7 = %c0_i32 to %c256_i32 step %c64_i32 iter_args(%arg8 = %cst_2) -> (tensor<64x64xf32, #mma>)  : i32 {
+            %48 = arith.subi %c256_i32, %arg7 : i32
+            %49 = arith.minsi %48, %c64_i32 : i32
+            %50 = tt.splat %49 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+            %51 = arith.cmpi slt, %21, %50 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+            %52 = tt.expand_dims %51 {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi1, #blocked>
+            %53 = tt.broadcast %52 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
+            %54 = arith.andi %31, %53 : tensor<64x64xi1, #blocked>
+            %55 = arith.extsi %arg7 : i32 to i64
+            %56 = tt.splat %55 : i64 -> tensor<1x64xi64, #blocked>
+            %57 = arith.addi %56, %37 : tensor<1x64xi64, #blocked>
+            %58 = tt.broadcast %57 : tensor<1x64xi64, #blocked> -> tensor<64x64xi64, #blocked>
+            %59 = tt.addptr %38, %58 : tensor<64x64x!tt.ptr<i8, 0>, #blocked>, tensor<64x64xi64, #blocked>
+            %60 = tt.load %59, %54, %cst_1 : tensor<64x64x!tt.ptr<i8, 0>, #blocked>
+            %61 = ttg.local_alloc %60 : (tensor<64x64xi8, #blocked>) -> !ttg.memdesc<64x64xi8, #shared1, #smem>
+            %62 = ttg.local_load %61 : !ttg.memdesc<64x64xi8, #shared1, #smem> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+            %63 = arith.andi %40, %53 : tensor<64x64xi1, #blocked>
+            %64 = tt.addptr %45, %58 : tensor<64x64x!tt.ptr<i8, 0>, #blocked>, tensor<64x64xi64, #blocked>
+            %65 = tt.load %64, %63, %cst_1 : tensor<64x64x!tt.ptr<i8, 0>, #blocked>
+            %66 = tt.trans %65 {order = array<i32: 1, 0>} : tensor<64x64xi8, #blocked> -> tensor<64x64xi8, #blocked1>
+            %67 = arith.uitofp %62 : tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> to tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+            %68 = arith.uitofp %66 : tensor<64x64xi8, #blocked1> to tensor<64x64xf32, #blocked1>
+            %69 = ttg.local_alloc %68 : (tensor<64x64xf32, #blocked1>) -> !ttg.memdesc<64x64xf32, #shared2, #smem>
+            ttng.fence_async_shared {bCluster = false}
+            %70 = ttng.warp_group_dot %67, %69, %arg8 {inputPrecision = 0 : i32, isAsync = true} : tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * !ttg.memdesc<64x64xf32, #shared2, #smem> -> tensor<64x64xf32, #mma>
+            %71:2 = ttng.warp_group_dot_wait %70, %69 {pendings = 0 : i32} : tensor<64x64xf32, #mma>, !ttg.memdesc<64x64xf32, #shared2, #smem>
+            scf.yield %71#0 : tensor<64x64xf32, #mma>
+          }
+          %47 = arith.truncf %46 : tensor<64x64xf32, #mma> to tensor<64x64xbf16, #mma>
+          ttng.async_tma_store_wait {pendings = 0 : i32}
+          ttg.local_store %47, %8 : tensor<64x64xbf16, #mma> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+          ttng.fence_async_shared {bCluster = false}
+          ttng.async_tma_copy_local_to_global %2[%19, %24] %8 : !tt.ptr<i8>, !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+        }
+        %16 = arith.addi %arg6, %c132_i32 : i32
+        scf.yield %16 : i32
+      }
+      ttng.async_tma_store_wait {pendings = 0 : i32}
+      ttg.local_dealloc %8 : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+{-#
+  external_resources: {
+    mlir_reproducer: {
+      pipeline: "builtin.module(triton-nvidia-mma-lowering, tritongpu-combine-tensor-select-and-if, tritongpu-allocate-warp-groups, convert-scf-to-cf, allocate-shared-memory, triton-tensor-memory-allocation, tritongpu-global-scratch-memory-allocation, convert-triton-gpu-to-llvm{compute-capability=90 ptx-version=84}, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}, cse, convert-nv-gpu-to-llvm, convert-warp-specialize-to-llvm, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}, cse, symbol-dce, enable-line-info)",
+      disable_threading: false,
+      verify_each: true
+    }
+  }
+#-}
+/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py:292:0: error: Failures have been detected while processing an MLIR pass pipeline
+/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py:292:0: note: Pipeline failed while executing [`ConvertTritonGPUToLLVM` on 'builtin.module' operation]: reproducer generated at `std::errs, please share the reproducer above with Triton project.`
+EEE2025-03-09 10:58:55,215 - INFO - Testing BF16 GMM with G=1, M=64
+2025-03-09 10:58:55,364 - INFO - Testing BF16 GMM with G=1, M=512
+2025-03-09 10:58:56,582 - INFO - Testing BF16 GMM with G=4, M=64
+F
+======================================================================
+ERROR: test_grouped_gemm_backward (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_backward)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 182, in test_grouped_gemm_backward
+    _test_grouped_gemm_backward((G, M, 256, 256), torch.device("cuda"))
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 144, in _test_grouped_gemm_backward
+    result.backward(grad_output)
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 307, in apply
+    return user_fn(self, *args)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 47, in backward
+    grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 573, in grouped_gemm_backward
+    _kernel_grouped_gemm_backward_x[grid_x](
+  File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 189, in run
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 167, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/testing.py", line 145, in do_bench
+    fn()
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 153, in kernel_call
+    self.fn.run(
+  File "/data/users/less/triton/python/triton/runtime/jit.py", line 563, in run
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 284, in compile
+    next_module = compile_ir(module, metadata)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/backends/nvidia/compiler.py", line 431, in <lambda>
+    stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/backends/nvidia/compiler.py", line 322, in make_llir
+    pm.run(mod)
+RuntimeError: PassManager::run failed
+
+======================================================================
+ERROR: test_grouped_gemm_backward_nontrivial_groups (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_backward_nontrivial_groups)
+Test backward pass with specific non-trivial group sizes
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 246, in test_grouped_gemm_backward_nontrivial_groups
+    _test_grouped_gemm_backward_custom_groups(
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 220, in _test_grouped_gemm_backward_custom_groups
+    result.backward(grad_output)
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 346, in backward
+    grad_tensors_ = _make_grads(tensors, grad_tensors_, is_grads_batched=False)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 164, in _make_grads
+    raise RuntimeError(
+RuntimeError: Mismatch in shape: grad_output[0] has a shape of torch.Size([128, 256]) and output[0] has a shape of torch.Size([128, 64]).
+
+======================================================================
+ERROR: test_grouped_gemm_backward_numerical_gradient (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_backward_numerical_gradient)
+Test backward pass using numerical gradients for verification
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 321, in test_grouped_gemm_backward_numerical_gradient
+    output = GroupedGEMMFunction.apply(a, b, m_sizes)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 42, in forward
+    return grouped_gemm(x, w, m_sizes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/groupgemm.py", line 521, in grouped_gemm
+    return _grouped_gemm(x, w, m_sizes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/groupgemm.py", line 500, in _grouped_gemm
+    _kernel_grouped_gemm[grid](
+  File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 192, in run
+    self.cache[key] = builtins.min(timings, key=timings.get)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: min() iterable argument is empty
+
+======================================================================
+FAIL: test_grouped_gemm_bf16 (unit_tests_back.TestGroupedGEMM.test_grouped_gemm_bf16)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 103, in test_grouped_gemm_bf16
+    _test_grouped_gemm_bf16((G, M, 256, 256), torch.device("cuda"))
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/unit_tests_back.py", line 86, in _test_grouped_gemm_bf16
+    self.assertTrue(result.shape == (M, N * G))
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 4 tests in 6.418s
+
+FAILED (failures=1, errors=3)
 """
 
 
