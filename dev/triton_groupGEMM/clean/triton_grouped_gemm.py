@@ -26,16 +26,16 @@ class GroupedGemmFunction(Function):
         x: torch.Tensor,
         w: torch.Tensor,
         bias: torch.Tensor,
-        m_sizes: int,
+        m_sizes: torch.Tensor,
     ) -> torch.Tensor:
         """
-
         Forward pass for grouped matrix multiplication.
 
         Args:
             ctx: Context object for autograd
             x: Input tensor of shape [M, K]
             w: Weight tensor of shape [N*G, K]
+            bias: Bias tensor (not used in current implementation)
             m_sizes: Tensor containing group sizes
 
         Returns:
@@ -66,6 +66,10 @@ class GroupedGemmFunction(Function):
         assert (
             N_times_G % G == 0
         ), f"Weight dim 0 ({N_times_G}) must be divisible by number of groups ({G})"
+
+        # Calculate N - output dimension per group
+        N = N_times_G // G
+
         # check m_sizes sum equals M
         total_m = m_sizes.sum().item()
         assert (
@@ -78,12 +82,19 @@ class GroupedGemmFunction(Function):
         # perform the grouped GEMM operation
         output = grouped_gemm(x, w, m_sizes)
 
+        # Verify the output shape
+        expected_output_shape = (M, N_times_G)
+        assert output.shape == expected_output_shape, (
+            f"Output shape mismatch: got {output.shape}, "
+            f"expected {expected_output_shape}"
+        )
+
         return output
 
     @staticmethod
     def backward(
         ctx, grad_output: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, None]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, None, None]:
         """
         Backward pass for grouped matrix multiplication.
 
@@ -92,7 +103,7 @@ class GroupedGemmFunction(Function):
             grad_output: Gradient tensor with respect to output
 
         Returns:
-            Tuple of gradients with respect to inputs (x, w, m_sizes)
+            Tuple of gradients with respect to inputs (x, w, bias, m_sizes)
         """
         x, w, m_sizes = ctx.saved_tensors
 
@@ -100,8 +111,31 @@ class GroupedGemmFunction(Function):
         if grad_output.dtype != torch.bfloat16:
             grad_output = grad_output.to(torch.bfloat16)
 
+        # Verify grad_output shape matches forward output shape
+        M, K = x.shape
+        N_times_G = w.shape[0]
+        expected_grad_shape = (M, N_times_G)
+        assert grad_output.shape == expected_grad_shape, (
+            f"grad_output shape mismatch: got {grad_output.shape}, "
+            f"expected {expected_grad_shape}"
+        )
+
         grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
-        return grad_x, grad_w, None  # no gradeint for m_sizes as constant
+
+        # Verify output gradient shapes
+        assert (
+            grad_x.shape == x.shape
+        ), f"grad_x shape mismatch: got {grad_x.shape}, expected {x.shape}"
+        assert (
+            grad_w.shape == w.shape
+        ), f"grad_w shape mismatch: got {grad_w.shape}, expected {w.shape}"
+
+        return (
+            grad_x,
+            grad_w,
+            None,
+            None,
+        )  # no gradient for bias and m_sizes as they are constant
 
 
 class GroupedGemm(nn.Module):
@@ -149,7 +183,7 @@ class GroupedGemm(nn.Module):
         if x.dtype != torch.bfloat16:
             x = x.to(torch.bfloat16)
 
-        # valide input dimension
+        # validate input dimension
         assert (
             x.shape[1] == self.input_dim
         ), f"Expected input dim {self.input_dim}, got {x.shape[1]}"

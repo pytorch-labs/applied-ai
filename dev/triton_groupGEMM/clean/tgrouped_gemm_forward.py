@@ -137,7 +137,7 @@ def _kernel_grouped_gemm(
     # problem sizes
     G: tl.constexpr,
     M_BUCKET: tl.constexpr,
-    N: tl.constexpr,
+    N: tl.constexpr,  # N is per group
     K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
@@ -165,17 +165,23 @@ def _kernel_grouped_gemm(
         M_end_offset = M_start_offset + m_size
 
         if m_size > 0:
+            # Compute for this group
             N_start_offset = g * N
-            n_size = N
+            n_size = N  # N is already per group
+
+            # Calculate the number of tiles for this group
             num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
             num_n_tiles = tl.cdiv(n_size, BLOCK_SIZE_N)
             num_tiles = num_m_tiles * num_n_tiles
 
             if USE_TMA_STORE:
+                # Set up TMA descriptor for output
                 # pyre-ignore
                 tl.extra.cuda.experimental_device_tensormap_create2d(
                     desc_ptr=c_desc_ptr,
-                    global_address=c_ptr + M_start_offset * N,
+                    global_address=c_ptr
+                    + M_start_offset * (N * G)
+                    + N_start_offset,  # Offset to this group's output
                     load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
                     global_size=[m_size, n_size],
                     element_ty=c_ptr.dtype.element_ty,
@@ -192,64 +198,91 @@ def _kernel_grouped_gemm(
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 tl.static_assert(K % BLOCK_SIZE_K == 0)
+
                 if USE_TMA_LOAD:
+                    # Use TMA to load input and weight blocks
                     m_offset = (M_start_offset + tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
                     n_offset = (N_start_offset + tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
                     for k_offset in range(0, K, BLOCK_SIZE_K):
+                        # Load input block [M, K]
                         a = tl._experimental_descriptor_load(
                             a_desc_ptr,
                             [m_offset, k_offset],
                             [BLOCK_SIZE_M, BLOCK_SIZE_K],
                             dtype,
                         )
+
+                        # Load weight block [N, K]
                         b = tl._experimental_descriptor_load(
                             b_desc_ptr,
                             [n_offset, k_offset],
                             [BLOCK_SIZE_N, BLOCK_SIZE_K],
                             dtype,
                         )
+
+                        # Compute matrix multiplication
                         accumulator += tl.dot(a, b.T)
                 else:
+                    # Manual load without TMA
                     offs_am = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                     offs_bn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
                     offs_k = tl.arange(0, BLOCK_SIZE_K)
+
                     a_ptrs = (
                         a_desc_ptr
                         + (M_start_offset + offs_am[:, None]) * K
                         + offs_k[None, :]
                     )
+
                     b_ptrs = (
                         b_desc_ptr
                         + (N_start_offset + offs_bn[:, None]) * K
                         + offs_k[None, :]
                     )
+
                     for k_offset in range(0, K, BLOCK_SIZE_K):
+                        # Load with bounds checking
                         a = tl.load(a_ptrs, mask=offs_am[:, None] < m_size)
                         b = tl.load(b_ptrs, mask=offs_bn[:, None] < n_size)
+
+                        # Compute matrix multiplication
                         accumulator += tl.dot(a, b.T)
+
+                        # Update pointers for next block
                         a_ptrs += BLOCK_SIZE_K
                         b_ptrs += BLOCK_SIZE_K
 
+                # Store result
                 if USE_TMA_STORE:
+                    # Store using TMA
                     m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
                     n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
                     tl._experimental_descriptor_store(
                         c_desc_ptr,
                         accumulator.to(c_ptr.dtype.element_ty),
                         [m_offset, n_offset],
                     )
                 else:
+                    # Manual store
                     offs_am = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                     offs_bn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
                     c = accumulator.to(c_ptr.dtype.element_ty)
+
                     tl.store(
                         c_ptr
-                        + (M_start_offset + offs_am[:, None]) * N
-                        + offs_bn[None, :],
+                        + (M_start_offset + offs_am[:, None])
+                        * (N * G)  # Row stride is N*G
+                        + (
+                            N_start_offset + offs_bn[None, :]
+                        ),  # Column offset to this group's N
                         c,
                         mask=offs_am[:, None] < m_size and offs_bn[None, :] < n_size,
                     )
-                tidx += NUM_SMS
+
+                tidx += NUM_SMS  # Move to next tile
 
             iterated_tiles += num_tiles
 
@@ -278,7 +311,7 @@ def _kernel_grouped_gemm_fp8_rowwise(
     # problem sizes
     G: tl.constexpr,
     M_BUCKET: tl.constexpr,
-    N: tl.constexpr,
+    N: tl.constexpr,  # N is per group
     K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
@@ -306,17 +339,23 @@ def _kernel_grouped_gemm_fp8_rowwise(
         M_end_offset = M_start_offset + m_size
 
         if m_size > 0:
+            # Compute for this group
             N_start_offset = g * N
-            n_size = N
+            n_size = N  # N is already per group
+
+            # Calculate the number of tiles for this group
             num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
             num_n_tiles = tl.cdiv(n_size, BLOCK_SIZE_N)
             num_tiles = num_m_tiles * num_n_tiles
 
             if USE_TMA_STORE:
+                # Set up TMA descriptor for output
                 # pyre-ignore
                 tl.extra.cuda.experimental_device_tensormap_create2d(
                     desc_ptr=c_desc_ptr,
-                    global_address=c_ptr + M_start_offset * N,
+                    global_address=c_ptr
+                    + M_start_offset * (N * G)
+                    + N_start_offset,  # Offset to this group's output
                     load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
                     global_size=[m_size, n_size],
                     element_ty=c_ptr.dtype.element_ty,
@@ -333,73 +372,103 @@ def _kernel_grouped_gemm_fp8_rowwise(
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 tl.static_assert(K % BLOCK_SIZE_K == 0)
+
                 if USE_TMA_LOAD:
+                    # Use TMA to load input and weight blocks with FP8 support
                     m_offset = (M_start_offset + tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
                     n_offset = (N_start_offset + tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
                     for k_offset in range(0, K, BLOCK_SIZE_K):
+                        # Load input block [M, K] with FP8
                         a = tl._experimental_descriptor_load(
                             a_desc_ptr,
                             [m_offset, k_offset],
                             [BLOCK_SIZE_M, BLOCK_SIZE_K],
                             dtype,
                         )
+
+                        # Load weight block [N, K] with FP8
                         b = tl._experimental_descriptor_load(
                             b_desc_ptr,
                             [n_offset, k_offset],
                             [BLOCK_SIZE_N, BLOCK_SIZE_K],
                             dtype,
                         )
+
+                        # Compute matrix multiplication
                         accumulator += tl.dot(a, b.T)
                 else:
+                    # Manual load without TMA for FP8
                     offs_am = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                     offs_bn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
                     offs_k = tl.arange(0, BLOCK_SIZE_K)
+
                     a_ptrs = (
                         a_desc_ptr
                         + (M_start_offset + offs_am[:, None]) * K
                         + offs_k[None, :]
                     )
+
                     b_ptrs = (
                         b_desc_ptr
                         + (N_start_offset + offs_bn[:, None]) * K
                         + offs_k[None, :]
                     )
+
                     for k_offset in range(0, K, BLOCK_SIZE_K):
+                        # Load with bounds checking
                         a = tl.load(a_ptrs, mask=offs_am[:, None] < m_size)
                         b = tl.load(b_ptrs, mask=offs_bn[:, None] < n_size)
+
+                        # Compute matrix multiplication
                         accumulator += tl.dot(a, b.T)
+
+                        # Update pointers for next block
                         a_ptrs += BLOCK_SIZE_K
                         b_ptrs += BLOCK_SIZE_K
 
+                # Load FP8 scales
                 offs_am = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                 offs_bn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
                 a_scale = tl.load(
                     a_scale_ptr + M_start_offset + offs_am[:, None],
                     mask=offs_am[:, None] < m_size,
                 )
+
                 b_scale = tl.load(
                     b_scale_ptr + N_start_offset + offs_bn[None, :],
                     mask=offs_bn[None, :] < n_size,
                 )
+
+                # Apply scales to result
                 c = accumulator.to(tl.float32) * a_scale * b_scale
 
+                # Store result
                 if USE_TMA_STORE:
+                    # Store using TMA
                     m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
                     n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
                     tl._experimental_descriptor_store(
                         c_desc_ptr,
                         c.to(c_ptr.dtype.element_ty),
                         [m_offset, n_offset],
                     )
                 else:
+                    # Manual store
                     tl.store(
                         c_ptr
-                        + (M_start_offset + offs_am[:, None]) * N
-                        + offs_bn[None, :],
+                        + (M_start_offset + offs_am[:, None])
+                        * (N * G)  # Row stride is N*G
+                        + (
+                            N_start_offset + offs_bn[None, :]
+                        ),  # Column offset to this group's N
                         c,
                         mask=offs_am[:, None] < m_size and offs_bn[None, :] < n_size,
                     )
-                tidx += NUM_SMS
+
+                tidx += NUM_SMS  # Move to next tile
 
             iterated_tiles += num_tiles
 
@@ -421,10 +490,18 @@ def _grouped_gemm(
     assert m_sizes.is_contiguous()
 
     M, K = x.shape
-    N = w.shape[0] // G
-    assert K == w.shape[1]
+    N_times_G = w.shape[0]
 
-    y = torch.empty((M, N), device=x.device, dtype=torch.bfloat16)
+    # Ensure N is per group
+    assert (
+        N_times_G % G == 0
+    ), f"Weight dimension ({N_times_G}) must be divisible by groups ({G})"
+    N = N_times_G // G
+
+    assert K == w.shape[1], f"Input K ({K}) must match weight K ({w.shape[1]})"
+
+    # Create output tensor with correct shape [M, N*G]
+    y = torch.empty((M, N_times_G), device=x.device, dtype=torch.bfloat16)
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     USE_TMA_LOAD = not torch.version.hip
@@ -465,7 +542,7 @@ def _grouped_gemm(
             desc_helper.fill_2d_tma_descriptor(
                 "w",
                 w.data_ptr(),
-                N * G,
+                N_times_G,
                 K,
                 META["BLOCK_SIZE_N"],
                 META["BLOCK_SIZE_K"],
@@ -488,7 +565,7 @@ def _grouped_gemm(
             m_sizes,
             G,
             M_BUCKET,
-            N,
+            N,  # N is per group
             K,
             NUM_SMS,
             USE_TMA_LOAD,
@@ -505,12 +582,18 @@ def _grouped_gemm(
             m_sizes,
             G,
             M_BUCKET,
-            N,
+            N,  # N is per group
             K,
             NUM_SMS,
             USE_TMA_LOAD,
             USE_TMA_STORE,
         )
+
+    # Verify the output shape
+    expected_output_shape = (M, N_times_G)
+    assert y.shape == expected_output_shape, (
+        f"Output shape mismatch: got {y.shape}, " f"expected {expected_output_shape}"
+    )
 
     return y
 

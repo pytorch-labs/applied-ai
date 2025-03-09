@@ -4,17 +4,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-
-"""
-current issues:
-Input shape: torch.Size([1024, 256])
-Output shape: torch.Size([1024, 128])
-Expected output shape: [1024, 512]
-free(): invalid size
-Aborted (core dumped)
-
-"""
-
 from typing import Tuple
 
 import torch
@@ -22,6 +11,69 @@ import triton
 import triton.language as tl
 from tma_utils import TmaAutoTuneHelper
 from triton.runtime import driver
+
+""" current errors:
+Input shape: torch.Size([1024, 256])
+Output shape: torch.Size([1024, 512])
+Expected output shape: [1024, 512]
+Traceback (most recent call last):
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 259, in <module>
+    example_usage()
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 250, in example_usage
+    loss.backward()
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 307, in apply
+    return user_fn(self, *args)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 123, in backward
+    grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 554, in grouped_gemm_backward
+    _kernel_grouped_gemm_backward_w[grid_w](
+  File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 189, in run
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 167, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/testing.py", line 145, in do_bench
+    fn()
+  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 153, in kernel_call
+    self.fn.run(
+  File "/data/users/less/triton/python/triton/runtime/jit.py", line 563, in run
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 278, in compile
+    module = src.make_ir(options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 81, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 94:44:
+                    # Load x_t [K, M] for this group's portion
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(
+                        0, BLOCK_SIZE_N
+                    )  # K dimension
+                    offs_k = tl.arange(0, BLOCK_SIZE_K)  # M dimension (reduction)
+
+                    n_mask = offs_n < K
+                    k_mask = offs_k < k_size
+
+                    x_t_block = tl.load(
+                        x_t_ptr
+                        + offs_n[None, :] * M  # Row stride is M
+                                            ^
+NameError('M is not defined')
+"""
 
 # NVIDIA configurations only (FBGemm has AMD options...not yet here)
 _CONFIGS = [
@@ -70,7 +122,6 @@ def early_config_prune(configs, name_args, **kwargs):
             name_args["K"],
         )
         # verify smem
-        # max_shared_memory = driver.get_device_properties(device)["max_shared_mem"]
         max_shared_memory = driver.active.utils.get_device_properties(device)[
             "max_shared_mem"
         ]
@@ -124,7 +175,7 @@ def _kernel_grouped_gemm_backward_x(
     # problem sizes
     G: tl.constexpr,
     M_bucket: tl.constexpr,
-    N: tl.constexpr,
+    N: tl.constexpr,  # N is per group
     K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
@@ -140,8 +191,8 @@ def _kernel_grouped_gemm_backward_x(
     grad_x = grad_y (dl/dY) @ w_t (w transposed)
 
     Here:
-    - grad_y is [M, N]
-    - w_t is [N*G, K] transposed to [K, N*G]
+    - grad_y is [M, N*G] where N is output dim per group
+    - w_t is [K, N*G] (transposed from [N*G, K])
     - grad_x is [M, K]
     """
 
@@ -162,44 +213,45 @@ def _kernel_grouped_gemm_backward_x(
         m_size = tl.load(m_sizes + g)
         M_end_offset = M_start_offset + m_size
 
-        num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
-        num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # K is output dim in backward
-        num_tiles = num_m_tiles * num_n_tiles
-
         is_valid_group = m_size > 0
         if is_valid_group:
-
+            # N_start_offset is where this group's output starts in the N*G dimension
             N_start_offset = g.to(tl.int64) * N
-            n_size = N
+            n_size = N  # This group's N size
 
+            # For grad_x, we need to compute [M, K]
             num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
-            num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # K is output dim in backward
+            num_n_tiles = tl.cdiv(
+                K, BLOCK_SIZE_N
+            )  # K is output dim in backward for grad_x
             num_tiles = num_m_tiles * num_n_tiles
 
-            # TODO - get things working with TMA first, then try to get it working without TMA
-            tl.extra.cuda.experimental_device_tensormap_create2d(
-                desc_ptr=c_desc_ptr,
-                global_address=grad_x_ptr + M_start_offset * K,
-                load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-                global_size=[m_size, K],
-                element_ty=grad_x_ptr.dtype.element_ty,
-            )
-            tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+            if USE_TMA_STORE:
+                # Set up descriptor for grad_x (output)
+                tl.extra.cuda.experimental_device_tensormap_create2d(
+                    desc_ptr=c_desc_ptr,
+                    global_address=grad_x_ptr + M_start_offset * K,
+                    load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+                    global_size=[m_size, K],
+                    element_ty=grad_x_ptr.dtype.element_ty,
+                )
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # move across tiles
+            # Move across tiles
             while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
                 gidx = tidx - iterated_tiles
-                # split M first and N second.
+                # Split M first and N second.
                 tile_m_idx = gidx % num_m_tiles
                 tile_n_idx = gidx // num_m_tiles
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-                # For each K block in the inner dimension (N in forward pass)
+                # For each K block in the inner dimension (N*G in grad_y)
+                # We iterate over the N values for this group
                 for k_offset in range(0, N, BLOCK_SIZE_K):
                     k_size = tl.minimum(BLOCK_SIZE_K, N - k_offset)
 
-                    # Load grad_y block [M, K]
+                    # Load grad_y block [M, N*G] for this group's portion
                     offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                     offs_k = tl.arange(0, BLOCK_SIZE_K)
 
@@ -207,29 +259,33 @@ def _kernel_grouped_gemm_backward_x(
                     m_mask = offs_m < m_size
                     k_mask = offs_k < k_size
 
-                    # Load grad_y [M, N]
+                    # Load grad_y [M, N*G] for this group's portion (N)
                     grad_y_block = tl.load(
                         grad_y_ptr
-                        + (M_start_offset + offs_m[:, None]) * N
-                        + (N_start_offset + k_offset + offs_k[None, :]),
+                        + (M_start_offset + offs_m[:, None])
+                        * (N * G)  # Full stride for N*G
+                        + (
+                            N_start_offset + k_offset + offs_k[None, :]
+                        ),  # Offset to this group's N
                         mask=m_mask[:, None] & k_mask[None, :],
                         other=0.0,
                     )
 
-                    # Load w_t [K, N]
+                    # Load w_t [K, N*G] for this group's portion (N)
                     offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-                    # Fix in _kernel_grouped_gemm_backward_x around line 109:
+                    n_mask = offs_n < K
+
                     w_t_block = tl.load(
                         w_t_ptr
-                        + (k_offset + offs_k[:, None]) * K  # Remove N_start_offset
-                        + offs_n[None, :],
-                        mask=k_mask[:, None] & (offs_n[None, :] < K),
+                        + offs_n[None, :] * (N * G)  # Row stride is N*G
+                        + (
+                            N_start_offset + k_offset + offs_k[:, None]
+                        ),  # Column offset to this group's N
+                        mask=k_mask[:, None] & n_mask[None, :],
                         other=0.0,
                     )
 
                     # Compute grad_x contribution from this block
-                    # accumulator += tl.dot(grad_y_block, w_t_block)
-
                     accumulator += tl.dot(
                         grad_y_block.to(tl.float32),
                         w_t_block.to(tl.float32),
@@ -237,21 +293,29 @@ def _kernel_grouped_gemm_backward_x(
                     )
 
                 # Store the result in grad_x
-                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+                if USE_TMA_STORE:
+                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                    tl._experimental_descriptor_store(
+                        c_desc_ptr,
+                        accumulator.to(grad_x_ptr.dtype.element_ty),
+                        [m_offset, n_offset],
+                    )
+                else:
+                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-                # TODO - get things working with TMA first, then try to get it working without TMA
-                m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
-                tl._experimental_descriptor_store(
-                    c_desc_ptr,
-                    accumulator.to(grad_x_ptr.dtype.element_ty),
-                    [m_offset, n_offset],
-                )
-                tidx += NUM_SMS  # move to next group
+                    tl.store(
+                        grad_x_ptr
+                        + (M_start_offset + offs_m[:, None]) * K
+                        + offs_n[None, :],
+                        accumulator.to(grad_x_ptr.dtype.element_ty),
+                        mask=offs_m[:, None] < m_size and offs_n[None, :] < K,
+                    )
 
-        iterated_tiles += num_tiles
-        # end kernel
+                tidx += NUM_SMS  # Move to next tile
+
+            iterated_tiles += num_tiles
 
 
 # ======= Backwards for d_W (weights) ======================================
@@ -270,7 +334,7 @@ def _kernel_grouped_gemm_backward_w(
     # problem sizes
     G: tl.constexpr,
     M_bucket: tl.constexpr,
-    N: tl.constexpr,
+    N: tl.constexpr,  # N is per group
     K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
@@ -278,7 +342,7 @@ def _kernel_grouped_gemm_backward_w(
     # tile sizes
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K,
+    BLOCK_SIZE_K: tl.constexpr,
 ) -> None:
     """
     Compute gradients with respect to w (weights).
@@ -286,112 +350,131 @@ def _kernel_grouped_gemm_backward_w(
     grad_w = x_t (x transposed) @ grad_y (dl/dY)
 
     Here:
-    - x_t is [M_K] but transposed to [K, M]
-    - grad_y is [M, N]
+    - x_t is [K, M] (transposed from [M, K])
+    - grad_y is [M, N*G] where N is output dim per group
     - grad_w is [N*G, K]
     """
     tidx = tl.program_id(0)
-
     dtype = grad_w_ptr.dtype.element_ty
-
     TMA_SIZE: tl.constexpr = tl.constexpr(128)
-    c_desc_ptr = workspace + tidx * TMA_SIZE
 
+    if USE_TMA_STORE:
+        c_desc_ptr = workspace + tidx * TMA_SIZE
+    else:
+        c_desc_ptr = None
+
+    M_end_offset = 0
     iterated_tiles = 0
+
     for g in tl.range(G):
         # For each group
-        M_offsets = [0]
-        for i in range(g):
-            M_offsets.append(M_offsets[-1] + tl.load(m_sizes + i))
-
-        M_start_offset = M_offsets[g]
+        M_start_offset = M_end_offset
         m_size = tl.load(m_sizes + g)
+        M_end_offset = M_start_offset + m_size
+
+        # N_start_offset is where this group's weights start in the N*G dimension
         N_start_offset = g.to(tl.int64) * N
 
         is_valid_group = m_size > 0
         if is_valid_group:
-
-            N_start_offset = g.to(tl.int64) * N
-
-            # grad_w computes N rows of K columns for each group
-            num_m_tiles = tl.cdiv(N, BLOCK_SIZE_M)
-            num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)
+            # For grad_w, we compute [N, K] for this group
+            num_m_tiles = tl.cdiv(N, BLOCK_SIZE_M)  # Tiles along N dimension
+            num_n_tiles = tl.cdiv(K, BLOCK_SIZE_N)  # Tiles along K dimension
             num_tiles = num_m_tiles * num_n_tiles
-            for k_offset in range(0, m_size, BLOCK_SIZE_K):
-                k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
 
-            tl.extra.cuda.experimental_device_tensormap_create2d(
-                desc_ptr=c_desc_ptr,
-                global_address=grad_w_ptr + N_start_offset * K,
-                load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-                global_size=[N, K],
-                element_ty=grad_w_ptr.dtype.element_ty,
-            )
-            tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+            if USE_TMA_STORE:
+                # Set up descriptor for grad_w (output) for this group
+                tl.extra.cuda.experimental_device_tensormap_create2d(
+                    desc_ptr=c_desc_ptr,
+                    global_address=grad_w_ptr
+                    + N_start_offset * K,  # Offset to this group's weights
+                    load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+                    global_size=[N, K],  # This group's weight dimensions
+                    element_ty=grad_w_ptr.dtype.element_ty,
+                )
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # move across tiles
+            # Move across tiles
             while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
                 gidx = tidx - iterated_tiles
-                # Split M first, N Second for the output grad_w
-                tile_m_idx = gidx % num_m_tiles
-                tile_n_idx = gidx // num_m_tiles
+                # Split tiles for output grad_w [N, K]
+                tile_m_idx = gidx % num_m_tiles  # Tile index along N dimension
+                tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-                # for each block M in grad_y (reduction dimension)
+                # Iterate over M for this group (reduction dimension)
                 for k_offset in range(0, m_size, BLOCK_SIZE_K):
-                    m_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
+                    k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
 
-                    # load x_t [K, M]
-                    offs_k = tl.arange(0, BLOCK_SIZE_K)
-                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+                    # Load x_t [K, M] for this group's portion
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(
+                        0, BLOCK_SIZE_N
+                    )  # K dimension
+                    offs_k = tl.arange(0, BLOCK_SIZE_K)  # M dimension (reduction)
 
-                    k_mask = offs_k < k_size
                     n_mask = offs_n < K
+                    k_mask = offs_k < k_size
 
                     x_t_block = tl.load(
                         x_t_ptr
-                        + offs_n[None, :] * M
-                        + (M_start_offset + k_offset + offs_k[:, None]),
+                        + offs_n[None, :] * M  # Row stride is M
+                        + (
+                            M_start_offset + k_offset + offs_k[:, None]
+                        ),  # Column offset to this group's M
                         mask=k_mask[:, None] & n_mask[None, :],
                         other=0.0,
                     )
 
-                    # load grad_y [M, N]
-                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                    # Load grad_y [M, N*G] for this group's portion
+                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(
+                        0, BLOCK_SIZE_M
+                    )  # N dimension
                     m_mask = offs_m < N
 
                     grad_y_block = tl.load(
                         grad_y_ptr
-                        + (M_start_offset + k_offset + offs_k[:, None]) * N
-                        + (N_start_offset + offs_m[None, :]),
+                        + (M_start_offset + k_offset + offs_k[:, None])
+                        * (N * G)  # Row stride is N*G
+                        + (
+                            N_start_offset + offs_m[None, :]
+                        ),  # Column offset to this group's N
                         mask=k_mask[:, None] & m_mask[None, :],
                         other=0.0,
                     )
 
-                    # compute grad_w contribution from this block
-                    # accumulator += tl.dot(x_t_block.T, grad_y_block.T)
+                    # Compute grad_w contribution from this block
                     accumulator += tl.dot(
                         x_t_block.T.to(tl.float32),
                         grad_y_block.T.to(tl.float32),
                         allow_tf32=True,
                     )
-                # store result to grad_w
-                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-                m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                # Store the result in grad_w
+                if USE_TMA_STORE:
+                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                    tl._experimental_descriptor_store(
+                        c_desc_ptr,
+                        accumulator.to(grad_w_ptr.dtype.element_ty),
+                        [m_offset, n_offset],
+                    )
+                else:
+                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-                tl.experimental_descriptor_store(
-                    c_desc_ptr,
-                    accumulator.to(grad_w_ptr.dtype.element_ty),
-                    [m_offset, n_offset],
-                )
-                tidx += NUM_SMS  # move to next group
+                    tl.store(
+                        grad_w_ptr
+                        + (N_start_offset + offs_m[:, None])
+                        * K  # Row offset to this group's weights
+                        + offs_n[None, :],  # Column offset (K dimension)
+                        accumulator.to(grad_w_ptr.dtype.element_ty),
+                        mask=offs_m[:, None] < N and offs_n[None, :] < K,
+                    )
 
-        iterated_tiles += num_tiles
-        # end kernel
+                tidx += NUM_SMS  # Move to next tile
+
+            iterated_tiles += num_tiles
 
 
 def grouped_gemm_backward(
@@ -399,8 +482,6 @@ def grouped_gemm_backward(
     x: torch.Tensor,
     w: torch.Tensor,
     m_sizes: torch.Tensor,
-    # x_scale: Optional[torch.Tensor] = None,
-    # w_scale: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Backward pass for grouped matrix multiplication.
@@ -415,7 +496,7 @@ def grouped_gemm_backward(
         Tuple of gradients with respect to x and w
     """
     if not hasattr(tl.extra, "cuda"):
-        raise NotImplementedError("Grouped GeMM without TMA is not available ...yet")
+        raise NotImplementedError("Grouped GeMM without TMA is not available yet")
 
     G = m_sizes.shape[0]
 
@@ -426,22 +507,28 @@ def grouped_gemm_backward(
     m_sizes = m_sizes.contiguous()
 
     M, K = x.shape
-    N = w.shape[0] // G
-    assert K == w.shape[1]
+    N_times_G = w.shape[0]
 
-    # Transpose x and w
-    x_t = x.T
-    w_t = w.T
+    # Calculate N - output dimension per group
+    N = N_times_G // G
 
-    # Allocate output tensors
+    assert K == w.shape[1], f"Input K ({K}) must match weight K ({w.shape[1]})"
+    assert grad_output.shape == (M, N_times_G), (
+        f"grad_output shape mismatch: got {grad_output.shape}, "
+        f"expected ({M}, {N_times_G})"
+    )
+
+    # Transpose x and w for backward computation
+    x_t = x.T.contiguous()
+    w_t = w.T.contiguous()
+
+    # Allocate output tensors with correct shapes
     grad_x = torch.empty_like(x)
     grad_w = torch.empty_like(w)
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     USE_TMA_LOAD = True
     USE_TMA_STORE = True
-
-    workspace = None
 
     # Setup TMA descriptors
     desc_helper = TmaAutoTuneHelper()
@@ -460,22 +547,23 @@ def grouped_gemm_backward(
     )
 
     def grid_x(META):
-
+        # Set up TMA descriptor for grad_output
         desc_helper.fill_2d_tma_descriptor(
             "grad_output",
             grad_output.data_ptr(),
             M,
-            N * G,
+            N_times_G,  # Full N*G dimension
             META["BLOCK_SIZE_M"],
             META["BLOCK_SIZE_K"],
             grad_output.element_size(),
         )
 
+        # Set up TMA descriptor for w_t
         desc_helper.fill_2d_tma_descriptor(
             "w_t",
             w_t.data_ptr(),
             K,
-            N * G,
+            N_times_G,  # Full N*G dimension
             META["BLOCK_SIZE_N"],
             META["BLOCK_SIZE_K"],
             w_t.element_size(),
@@ -483,8 +571,7 @@ def grouped_gemm_backward(
         return (NUM_SMS,)
 
     def grid_w(META):
-
-        # grad_w computation
+        # Set up TMA descriptor for x_t
         desc_helper.fill_2d_tma_descriptor(
             "x_t",
             x_t.data_ptr(),
@@ -495,18 +582,19 @@ def grouped_gemm_backward(
             x_t.element_size(),
         )
 
+        # Set up TMA descriptor for grad_output
         desc_helper.fill_2d_tma_descriptor(
             "grad_output",
             grad_output.data_ptr(),
             M,
-            N * G,
+            N_times_G,  # Full N*G dimension
             META["BLOCK_SIZE_K"],
             META["BLOCK_SIZE_M"],
             grad_output.element_size(),
         )
         return (NUM_SMS,)
 
-    # Launch kernels
+    # Launch kernels with the next power of 2 for M
     M_bucket = triton.next_power_of_2(M)
 
     # Compute grad_x
@@ -518,7 +606,7 @@ def grouped_gemm_backward(
         m_sizes,
         G,
         M_bucket,
-        N,
+        N,  # Pass N (per group) to kernel
         K,
         NUM_SMS,
         USE_TMA_LOAD,
@@ -534,7 +622,7 @@ def grouped_gemm_backward(
         m_sizes,
         G,
         M_bucket,
-        N,
+        N,  # Pass N (per group) to kernel
         K,
         NUM_SMS,
         USE_TMA_LOAD,
