@@ -96,7 +96,7 @@ class TestGroupedGEMM(unittest.TestCase):
             # Run the grouped GEMM operation
             result = grouped_gemm(a, b, m_sizes)
 
-            # Check output shape
+            # Check output shape - fix: ensure the expected shape is correct
             expected_shape = torch.Size([M, N * G])
             self.assertEqual(
                 result.shape,
@@ -179,7 +179,7 @@ class TestGroupedGEMM(unittest.TestCase):
             result = GroupedGEMMFunction.apply(a, b, m_sizes)
 
             # Verify forward output shape
-            expected_shape = (M, N * G)
+            expected_shape = torch.Size([M, N * G])
             self.assertEqual(
                 result.shape,
                 expected_shape,
@@ -275,7 +275,7 @@ class TestGroupedGEMM(unittest.TestCase):
             result = GroupedGEMMFunction.apply(a, b, m_sizes)
 
             # Verify shape matches expectations
-            expected_shape = (M, N * G)
+            expected_shape = torch.Size([M, N * G])
             self.assertEqual(
                 result.shape,
                 expected_shape,
@@ -432,3 +432,24 @@ class TestGroupedGEMM(unittest.TestCase):
             loss_minus = torch.sum(output_minus * grad_output).item()
 
             # Restore original value
+            b[i, j] = orig_val
+
+            # Compute numerical gradient
+            numerical_grad = (loss_plus - loss_minus) / (2 * eps)
+            analytical_grad = analytical_grad_b[i, j].item()
+
+            # Check with higher tolerance for numerical gradients
+            rel_error = abs(numerical_grad - analytical_grad) / (
+                1e-8 + abs(analytical_grad)
+            )
+            self.assertLess(
+                rel_error,
+                0.2,  # Higher tolerance for bf16
+                f"Gradient check for b[{i},{j}]: numerical={numerical_grad}, analytical={analytical_grad}",
+            )
+
+        logging.info("Numerical gradient test passed")
+
+
+if __name__ == "__main__":
+    unittest.main()
