@@ -13,79 +13,13 @@ from tma_utils import TmaAutoTuneHelper
 from triton.runtime import driver
 
 """
+Shapes passing:
+TMA benchmarks will be running with experimental grid constant TMA descriptor.
 Input shape: torch.Size([1024, 256])
 Output shape: torch.Size([1024, 512])
 Expected output shape: [1024, 512]
-Traceback (most recent call last):
-  File "/data/users/less/triton/python/triton/language/core.py", line 34, in wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/language/core.py", line 1814, in dot
-    return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/language/semantic.py", line 1566, in dot
-    assert lhs.shape[-1].value == rhs.shape[
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: First input shape (['constexpr[128]', 'constexpr[64]']) and second input shape ['constexpr[128]', 'constexpr[128]'] are not compatible for matmul (second index of first shape (64) must be equal to first index of second shape (128)
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 259, in <module>
-    example_usage()
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 250, in example_usage
-    loss.backward()
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/_tensor.py", line 648, in backward
-    torch.autograd.backward(
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/__init__.py", line 353, in backward
-    _engine_run_backward(
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
-    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/less/.conda/envs/tritondev/lib/python3.12/site-packages/torch/autograd/function.py", line 307, in apply
-    return user_fn(self, *args)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/triton_grouped_gemm.py", line 123, in backward
-    grad_x, grad_w = grouped_gemm_backward(grad_output, x, w, m_sizes)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/applied-ai/dev/triton_groupGEMM/clean/tgrouped_gemm_backwards.py", line 563, in grouped_gemm_backward
-    _kernel_grouped_gemm_backward_w[grid_w](
-  File "/data/users/less/triton/python/triton/runtime/jit.py", line 336, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 189, in run
-    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 167, in _bench
-    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/testing.py", line 145, in do_bench
-    fn()
-  File "/data/users/less/triton/python/triton/runtime/autotuner.py", line 153, in kernel_call
-    self.fn.run(
-  File "/data/users/less/triton/python/triton/runtime/jit.py", line 563, in run
-    kernel = self.compile(src, target=target, options=options.__dict__)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 278, in compile
-    module = src.make_ir(options, codegen_fns, module_map, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/users/less/triton/python/triton/compiler/compiler.py", line 81, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 127:35:
-                        + offs_n[None, :] * M_bucket
-                        # M dimension is the column in x_t
-                        + (M_start_offset + k_offset + offs_k[:, None]),
-                        mask=k_mask[:, None] & n_mask[None, :],
-                        other=0.0,
-                    )
-
-                    # Compute grad_w contribution: equivalent to (x_t @ grad_y)^T
-                    # This is more efficient than explicit transpose operations
-                    # We compute x_t.T (M,K) @ grad_y (M,N) = (K,N)
-                    # Matrix dimensions: [BLOCK_SIZE_K, BLOCK_SIZE_N] @ [BLOCK_SIZE_K, BLOCK_SIZE_M] -> [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                    accumulator += tl.dot(
-                                   ^
+Weight grad shape: torch.Size([512, 256])
+Expected weight grad shape: [512, 256]
 """
 
 
@@ -250,89 +184,98 @@ def _kernel_grouped_gemm_backward_w(
                 tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
             # Move across tiles
-            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-                gidx = tidx - iterated_tiles
-                # Split tiles for output grad_w [N, K]
-                tile_m_idx = gidx % num_m_tiles  # Tile index along N dimension
-                tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
+            for tile_idx in range(iterated_tiles, iterated_tiles + num_tiles, NUM_SMS):
+                should_process = tile_idx < iterated_tiles + num_tiles
 
-                # Output accumulator shape: [BLOCK_SIZE_M=N_tiles, BLOCK_SIZE_N=K_tiles]
-                accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+                if should_process and (
+                    (tidx < tile_idx + NUM_SMS) and (tidx >= tile_idx)
+                ):
+                    gidx = tidx - iterated_tiles
+                    # Split tiles for output grad_w [N, K]
+                    tile_m_idx = gidx % num_m_tiles  # Tile index along N dimension
+                    tile_n_idx = gidx // num_m_tiles  # Tile index along K dimension
 
-                # Precompute offsets for better memory access patterns
-                # N dimension offset (for grad_w outputs)
-                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-                # K dimension offset (for grad_w outputs)
-                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-                # Prepare masks that will be reused
-                n_mask = offs_n < K  # K dimension boundary check
-                m_mask = offs_m < N  # N dimension boundary check
-
-                # Iterate over M for this group (reduction dimension)
-                for k_offset in range(0, m_size, BLOCK_SIZE_K):
-                    # Compute actual K size for this block (handles edge cases)
-                    k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
-
-                    # Offsets for the reduction dimension (M)
-                    offs_k = tl.arange(0, BLOCK_SIZE_K)
-                    k_mask = offs_k < k_size
-
-                    # Load grad_y [M, N*G] in a more coalesced pattern
-                    # Shape: [BLOCK_SIZE_K=M_tiles, BLOCK_SIZE_M=N_tiles]
-                    grad_y_block = tl.load(
-                        grad_y_ptr
-                        # Row major access: first dimension (M) stride * N*G
-                        + (M_start_offset + k_offset + offs_k[:, None]) * (N * G)
-                        # Column dimension: offset to this group's N
-                        + (N_start_offset + offs_m[None, :]),
-                        mask=k_mask[:, None] & m_mask[None, :],
-                        other=0.0,
+                    # Output accumulator shape: [BLOCK_SIZE_M=N_tiles, BLOCK_SIZE_N=K_tiles]
+                    accumulator = tl.zeros(
+                        (BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32
                     )
 
-                    # Load x_t [K, M] in a more coalesced pattern
-                    # Shape: [BLOCK_SIZE_K=M_tiles, BLOCK_SIZE_N=K_tiles]
-                    x_t_block = tl.load(
-                        x_t_ptr
-                        # K dimension is the row in x_t
-                        + offs_n[None, :] * M_bucket
-                        # M dimension is the column in x_t
-                        + (M_start_offset + k_offset + offs_k[:, None]),
-                        mask=k_mask[:, None] & n_mask[None, :],
-                        other=0.0,
-                    )
+                    # Precompute offsets for better memory access patterns
+                    # N dimension offset (for grad_w outputs)
+                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                    # K dimension offset (for grad_w outputs)
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-                    # Compute grad_w contribution: equivalent to (x_t @ grad_y)^T
-                    # This is more efficient than explicit transpose operations
-                    # We compute x_t.T (M,K) @ grad_y (M,N) = (K,N)
-                    # Matrix dimensions: [BLOCK_SIZE_K, BLOCK_SIZE_N] @ [BLOCK_SIZE_K, BLOCK_SIZE_M] -> [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                    accumulator += tl.dot(
-                        x_t_block.to(tl.float32),
-                        grad_y_block.to(tl.float32),
-                        allow_tf32=True,
-                    ).T
+                    # Prepare masks that will be reused
+                    n_mask = offs_n < K  # K dimension boundary check
+                    m_mask = offs_m < N  # N dimension boundary check
 
-                # Store the result in grad_w
-                if USE_TMA_STORE:
-                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
-                    tl._experimental_descriptor_store(
-                        c_desc_ptr,
-                        accumulator.to(grad_w_ptr.dtype.element_ty),
-                        [m_offset, n_offset],
-                    )
-                else:
-                    # Store in a coalesced pattern - accessing grad_w[N*G, K]
-                    # Each thread block writes BLOCK_SIZE_M x BLOCK_SIZE_N region
-                    tl.store(
-                        grad_w_ptr
-                        # N dimension with K stride
-                        + (N_start_offset + offs_m[:, None]) * K
-                        # K dimension (innermost, for coalescing)
-                        + offs_n[None, :],
-                        accumulator.to(grad_w_ptr.dtype.element_ty),
-                        mask=m_mask[:, None] & n_mask[None, :],
-                    )
+                    # Iterate over M for this group (reduction dimension)
+                    for k_offset in range(0, m_size, BLOCK_SIZE_K):
+                        # Compute actual K size for this block (handles edge cases)
+                        k_size = tl.minimum(BLOCK_SIZE_K, m_size - k_offset)
+
+                        # Offsets for the reduction dimension (M)
+                        offs_k = tl.arange(0, BLOCK_SIZE_K)
+                        k_mask = offs_k < k_size
+
+                        # Load grad_y [M, N*G] in a more coalesced pattern
+                        # Shape: [BLOCK_SIZE_K=M_tiles, BLOCK_SIZE_M=N_tiles]
+                        grad_y_block = tl.load(
+                            grad_y_ptr
+                            # Row major access: first dimension (M) stride * N*G
+                            + (M_start_offset + k_offset + offs_k[:, None]) * (N * G)
+                            # Column dimension: offset to this group's N
+                            + (N_start_offset + offs_m[None, :]),
+                            mask=k_mask[:, None] & m_mask[None, :],
+                            other=0.0,
+                        )
+
+                        # Load x_t [K, M] in a more coalesced pattern
+                        # Shape: [BLOCK_SIZE_K=M_tiles, BLOCK_SIZE_N=K_tiles]
+                        x_t_block = tl.load(
+                            x_t_ptr
+                            # K dimension is the row in x_t
+                            + offs_n[None, :] * M_bucket
+                            # M dimension is the column in x_t
+                            + (M_start_offset + k_offset + offs_k[:, None]),
+                            mask=k_mask[:, None] & n_mask[None, :],
+                            other=0.0,
+                        )
+
+                        # Compute grad_w contribution: equivalent to (x_t @ grad_y)^T
+                        # This is more efficient than explicit transpose operations
+                        # We compute x_t.T (M,K) @ grad_y (M,N) = (K,N)
+                        # Matrix dimensions: [BLOCK_SIZE_K, BLOCK_SIZE_N] @ [BLOCK_SIZE_K, BLOCK_SIZE_M] -> [BLOCK_SIZE_N, BLOCK_SIZE_M]
+                        accumulator += tl.dot(
+                            x_t_block.to(tl.float32).T,  # Transpose x_t_block
+                            grad_y_block.to(tl.float32),
+                            allow_tf32=True,
+                        ).T
+
+                    # Store the result in grad_w
+
+                    if USE_TMA_STORE:
+
+                        m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                        n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                        tl._experimental_descriptor_store(
+                            c_desc_ptr,
+                            accumulator.to(grad_w_ptr.dtype.element_ty),
+                            [m_offset, n_offset],
+                        )
+                    else:
+                        # Store in a coalesced pattern - accessing grad_w[N*G, K]
+                        # Each thread block writes BLOCK_SIZE_M x BLOCK_SIZE_N region
+                        tl.store(
+                            grad_w_ptr
+                            # N dimension with K stride
+                            + (N_start_offset + offs_m[:, None]) * K
+                            # K dimension (innermost, for coalescing)
+                            + offs_n[None, :],
+                            accumulator.to(grad_w_ptr.dtype.element_ty),
+                            mask=m_mask[:, None] & n_mask[None, :],
+                        )
 
                 tidx += NUM_SMS  # Move to next tile
 
@@ -418,81 +361,88 @@ def _kernel_grouped_gemm_backward_x(
                 tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
             # Move across tiles
-            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-                gidx = tidx - iterated_tiles
-                # Split M first and N second.
-                tile_m_idx = gidx % num_m_tiles
-                tile_n_idx = gidx // num_m_tiles
+            for tile_idx in range(iterated_tiles, iterated_tiles + num_tiles, NUM_SMS):
+                should_process = tile_idx < iterated_tiles + num_tiles
 
-                # Precompute offsets for better memory access patterns
-                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+                if should_process and (
+                    (tidx < tile_idx + NUM_SMS) and (tidx >= tile_idx)
+                ):
+                    gidx = tidx - iterated_tiles
+                    # Split M first and N second.
+                    tile_m_idx = gidx % num_m_tiles
+                    tile_n_idx = gidx // num_m_tiles
 
-                # Prepare masks that will be reused
-                m_mask = offs_m < m_size
-                n_mask = offs_n < K
+                    # Precompute offsets for better memory access patterns
+                    offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                    offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-                accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+                    # Prepare masks that will be reused
+                    m_mask = offs_m < m_size
+                    n_mask = offs_n < K
 
-                # For each K block in the inner dimension (N*G in grad_y)
-                # We iterate over the N values for this group
-                for k_offset in range(0, N, BLOCK_SIZE_K):
-                    k_size = tl.minimum(BLOCK_SIZE_K, N - k_offset)
-                    offs_k = tl.arange(0, BLOCK_SIZE_K)
-                    k_mask = offs_k < k_size
-
-                    # Load grad_y [M, N*G] with better coalescing
-                    # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                    grad_y_block = tl.load(
-                        grad_y_ptr
-                        # Row major: M offset with N*G stride
-                        + (M_start_offset + offs_m[:, None]) * (N * G)
-                        # N*G offset (column major)
-                        + (N_start_offset + k_offset + offs_k[None, :]),
-                        mask=m_mask[:, None] & k_mask[None, :],
-                        other=0.0,
+                    accumulator = tl.zeros(
+                        (BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32
                     )
 
-                    # Load w_t [K, N*G] with better coalescing
-                    # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
-                    w_t_block = tl.load(
-                        w_t_ptr
-                        # Row major: K offset with N*G stride
-                        + offs_n[:, None] * (N * G)
-                        # N*G offset (column major)
-                        + (N_start_offset + k_offset + offs_k[None, :]),
-                        mask=n_mask[:, None] & k_mask[None, :],
-                        other=0.0,
-                    )
+                    # For each K block in the inner dimension (N*G in grad_y)
+                    # We iterate over the N values for this group
+                    for k_offset in range(0, N, BLOCK_SIZE_K):
+                        k_size = tl.minimum(BLOCK_SIZE_K, N - k_offset)
+                        offs_k = tl.arange(0, BLOCK_SIZE_K)
+                        k_mask = offs_k < k_size
 
-                    # Compute grad_x contribution using the properly oriented matrices
-                    # We need: grad_y [M,N] @ w_t.T [N,K] = [M,K]
-                    accumulator += tl.dot(
-                        grad_y_block.to(tl.float32),
-                        w_t_block.T.to(tl.float32),
-                        allow_tf32=True,
-                    )
+                        # Load grad_y [M, N*G] with better coalescing
+                        # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
+                        grad_y_block = tl.load(
+                            grad_y_ptr
+                            # Row major: M offset with N*G stride
+                            + (M_start_offset + offs_m[:, None]) * (N * G)
+                            # N*G offset (column major)
+                            + (N_start_offset + k_offset + offs_k[None, :]),
+                            mask=m_mask[:, None] & k_mask[None, :],
+                            other=0.0,
+                        )
 
-                # Store the result in grad_x using coalesced access pattern
-                if USE_TMA_STORE:
-                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
-                    tl._experimental_descriptor_store(
-                        c_desc_ptr,
-                        accumulator.to(grad_x_ptr.dtype.element_ty),
-                        [m_offset, n_offset],
-                    )
-                else:
-                    # Store grad_x [M, K] in row-major order for coalescing
-                    tl.store(
-                        grad_x_ptr
-                        # Row major: M offset with K stride
-                        + (M_start_offset + offs_m[:, None]) * K
-                        # K offset (column major)
-                        + offs_n[None, :],
-                        accumulator.to(grad_x_ptr.dtype.element_ty),
-                        mask=m_mask[:, None] & n_mask[None, :],
-                    )
+                        # Load w_t [K, N*G] with better coalescing
+                        # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                        w_t_block = tl.load(
+                            w_t_ptr
+                            # Row major: K offset with N*G stride
+                            + offs_n[:, None] * (N * G)
+                            # N*G offset (column major)
+                            + (N_start_offset + k_offset + offs_k[None, :]),
+                            mask=n_mask[:, None] & k_mask[None, :],
+                            other=0.0,
+                        )
+
+                        # Compute grad_x contribution using the properly oriented matrices
+                        # We need: grad_y [M,N] @ w_t.T [N,K] = [M,K]
+                        accumulator += tl.dot(
+                            grad_y_block.to(tl.float32),
+                            w_t_block.T.to(tl.float32),
+                            allow_tf32=True,
+                        )
+
+                    # Store the result in grad_x using coalesced access pattern
+                    if USE_TMA_STORE:
+                        m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                        n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                        tl._experimental_descriptor_store(
+                            c_desc_ptr,
+                            accumulator.to(grad_x_ptr.dtype.element_ty),
+                            [m_offset, n_offset],
+                        )
+                    else:
+                        # Store grad_x [M, K] in row-major order for coalescing
+                        tl.store(
+                            grad_x_ptr
+                            # Row major: M offset with K stride
+                            + (M_start_offset + offs_m[:, None]) * K
+                            # K offset (column major)
+                            + offs_n[None, :],
+                            accumulator.to(grad_x_ptr.dtype.element_ty),
+                            mask=m_mask[:, None] & n_mask[None, :],
+                        )
 
                 tidx += NUM_SMS  # Move to next tile
 
@@ -550,7 +500,7 @@ def grouped_gemm_backward(
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     USE_TMA_LOAD = True
-    USE_TMA_STORE = False  # Set to False by default for broader compatibility
+    USE_TMA_STORE = True
 
     # Setup TMA descriptors
     desc_helper = TmaAutoTuneHelper()
