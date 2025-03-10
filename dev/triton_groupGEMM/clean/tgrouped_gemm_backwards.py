@@ -4,279 +4,22 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 from typing import Tuple
 
 import torch
 import triton
 import triton.language as tl
 from tma_utils import TmaAutoTuneHelper
-from triton.runtime import driver
 
-""" Current errors:
-2025-03-09 15:01:01,445 - INFO - Input x shape: torch.Size([32, 16])
-2025-03-09 15:01:01,445 - INFO - Weight w shape: torch.Size([32, 16])
-2025-03-09 15:01:01,446 - INFO - Group sizes m_sizes: tensor([16, 16], device='cuda:0', dtype=torch.int32)
-2025-03-09 15:01:01,462 - INFO - Sum of group sizes: 32
-2025-03-09 15:01:01,463 - INFO - Forward function signature: def _grouped_gemm(
-2025-03-09 15:01:01,463 - INFO - Testing forward pass...
-2025-03-09 15:01:01,579 - ERROR - Forward pass error: min() iterable argument is empty
-2025-03-09 15:01:01,579 - INFO - Testing backward pass...
-2025-03-09 15:01:01,579 - INFO - Gradient shape: torch.Size([32, 32])
-2025-03-09 15:01:01,579 - INFO - Number of autotuner configs: 108
-2025-03-09 15:01:01,579 - INFO - early_config_prune called with 108 configs
-2025-03-09 15:01:01,579 - INFO - name_args keys: ['G', 'M_bucket', 'N', 'K', 'grad_x_ptr']
-2025-03-09 15:01:01,579 - INFO - Using element size: 2
-2025-03-09 15:01:01,579 - INFO - Problem size: G=2, M=32, N=16, K=16
-2025-03-09 15:01:01,581 - INFO - Max shared memory: 232448
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=8192
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=8192
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=16384
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=16384
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=18432
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=18432
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=20480
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=20480
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=30720
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=30720
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=40960
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=40960
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=61440
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=61440
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=81920
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=81920
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=122880
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=32, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=122880
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=12288
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=18432
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=18432
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=16384
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=16384
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=24576
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,581 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=65536
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=65536
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=147456
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=64, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=147456
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=20480
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=32, num_stages=2, shared_mem=20480
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=30720
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=32, num_stages=3, shared_mem=30720
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=40960
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=64, num_stages=2, shared_mem=40960
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=61440
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=64, num_stages=3, shared_mem=61440
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=81920
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=128, num_stages=2, shared_mem=81920
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=122880
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=32, BLOCK_K=128, num_stages=3, shared_mem=122880
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, num_stages=2, shared_mem=24576
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, num_stages=3, shared_mem=36864
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=64, num_stages=2, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=64, num_stages=3, shared_mem=73728
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=128, num_stages=2, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=147456
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=64, BLOCK_K=128, num_stages=3, shared_mem=147456
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=32, num_stages=2, shared_mem=32768
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=32, num_stages=3, shared_mem=49152
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=65536
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_stages=2, shared_mem=65536
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_stages=3, shared_mem=98304
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=131072
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=128, num_stages=2, shared_mem=131072
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=196608
-2025-03-09 15:01:01,582 - INFO - Config accepted: BLOCK_M=128, BLOCK_N=128, BLOCK_K=128, num_stages=3, shared_mem=196608
-2025-03-09 15:01:01,582 - INFO - Returned 108 configs after pruning
-2025-03-09 15:01:01,582 - INFO - Number of pruned configs: 108
-2025-03-09 15:01:01,695 - ERROR - Backward pass setup error: min() iterable argument is empty
-"""
-
-# NVIDIA configurations - block sizes for H100
-_CONFIGS = [
-    triton.Config(
-        {
-            "BLOCK_SIZE_M": block_size_m,
-            "BLOCK_SIZE_N": block_size_n,
-            "BLOCK_SIZE_K": block_size_k,
-        },
-        num_stages=num_stages,
-        num_warps=num_warps,
-        num_ctas=num_ctas,
-    )
-    for block_size_m in [32, 64, 128]  # Balanced range for M dimension
-    for block_size_n in [32, 64, 128]  # Balanced range for N dimension
-    for block_size_k in [32, 64, 128]  # Balanced range for K dimension
-    for num_stages in [2, 3]  # Reduced stages for memory efficiency
-    for num_warps in [4, 8]  # Common warp counts
-    for num_ctas in [1]  # Single CTA for simplicity
-]
-
-
-def early_config_prune(configs, name_args, **kwargs):
-    """
-    Prune configurations based on hardware constraints and problem size.
-    Modified to ensure at least one configuration always passes through.
-    """
-    import logging
-
-    import torch
-    from triton.runtime import driver
-
-    # Log what's happening for debugging
-    logging.info(f"early_config_prune called with {len(configs)} configs")
-    logging.info(f"name_args keys: {list(name_args.keys())}")
-
-    device = torch.cuda.current_device()
-
-    # Get element size for the tensor we're computing gradients for
-    dtsize = 2  # Default to 2 bytes (for bfloat16)
-    if "grad_x_ptr" in name_args:
-        dtsize = name_args["grad_x_ptr"].element_size()
-    elif "grad_w_ptr" in name_args:
-        dtsize = name_args["grad_w_ptr"].element_size()
-
-    logging.info(f"Using element size: {dtsize}")
-
-    # Check for required keys and use reasonable defaults if missing
-    G = name_args.get("G", 1)
-    M = name_args.get("M_bucket", 128)
-    N = name_args.get("N", 128)
-    K = name_args.get("K", 128)
-
-    logging.info(f"Problem size: G={G}, M={M}, N={N}, K={K}")
-
-    # Get max shared memory
-    max_shared_memory = driver.active.utils.get_device_properties(device)[
-        "max_shared_mem"
-    ]
-    logging.info(f"Max shared memory: {max_shared_memory}")
-
-    pruned_configs = []
-
-    for config in configs:
-        kw = config.kwargs
-        BLOCK_M, BLOCK_N, BLOCK_K, num_stages = (
-            kw["BLOCK_SIZE_M"],
-            kw["BLOCK_SIZE_N"],
-            kw["BLOCK_SIZE_K"],
-            config.num_stages,
-        )
-
-        # Calculate shared memory requirements
-        required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
-
-        if required_shared_memory <= max_shared_memory:
-            pruned_configs.append(config)
-            logging.info(
-                f"Config accepted: BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_K={BLOCK_K}, "
-                f"num_stages={num_stages}, shared_mem={required_shared_memory}"
-            )
-        else:
-            logging.info(
-                f"Config rejected: BLOCK_M={BLOCK_M}, BLOCK_N={BLOCK_N}, BLOCK_K={BLOCK_K}, "
-                f"num_stages={num_stages}, shared_mem={required_shared_memory}"
-            )
-
-    # If all configs were pruned, add the smallest one
-    if not pruned_configs and configs:
-        smallest_config = min(
-            configs,
-            key=lambda c: (
-                c.kwargs["BLOCK_SIZE_M"]
-                * c.kwargs["BLOCK_SIZE_N"]
-                * c.kwargs["BLOCK_SIZE_K"]
-                * c.num_stages
-            ),
-        )
-
-        # Calculate its shared memory requirements
-        BLOCK_M = smallest_config.kwargs["BLOCK_SIZE_M"]
-        BLOCK_N = smallest_config.kwargs["BLOCK_SIZE_N"]
-        BLOCK_K = smallest_config.kwargs["BLOCK_SIZE_K"]
-        num_stages = smallest_config.num_stages
-
-        sm_req = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
-
-        # If it still doesn't fit, create an even smaller one that will fit
-        if sm_req > max_shared_memory:
-            from triton import Config
-
-            # Keep reducing until we find a configuration that fits
-            for bs in [16, 8, 4]:
-                sm_req = (bs + bs) * bs * 1 * dtsize
-                if sm_req <= max_shared_memory:
-                    logging.info(f"Creating minimal config with block size {bs}")
-                    smallest_config = Config(
-                        {"BLOCK_SIZE_M": bs, "BLOCK_SIZE_N": bs, "BLOCK_SIZE_K": bs},
-                        num_stages=1,
-                        num_warps=1,
-                        num_ctas=1,
-                    )
-                    break
-
-        pruned_configs.append(smallest_config)
-        logging.info(f"Added smallest config as fallback: {smallest_config}")
-
-    logging.info(f"Returned {len(pruned_configs)} configs after pruning")
-    return pruned_configs
-
-
-# ======= Backwards for weights (d_W) ======================================
-@triton.autotune(
-    configs=_CONFIGS,
-    key=["G", "M_bucket", "N", "K"],
-    prune_configs_by={"early_config_prune": early_config_prune},
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+# Fixed configuration for H100 - no autotuning
+# These are conservative settings that should work well on H100 GPUs
 @triton.jit
 def _kernel_grouped_gemm_backward_w(
     x_t_ptr,  # x transposed [K, M]
@@ -292,10 +35,10 @@ def _kernel_grouped_gemm_backward_w(
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
     USE_TMA_STORE: tl.constexpr,
-    # tile sizes
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
+    # tile sizes - fixed for H100
+    BLOCK_SIZE_M: tl.constexpr = 64,
+    BLOCK_SIZE_N: tl.constexpr = 64,
+    BLOCK_SIZE_K: tl.constexpr = 32,
 ) -> None:
     """
     Compute gradients with respect to w (weights).
@@ -393,9 +136,7 @@ def _kernel_grouped_gemm_backward_w(
                         other=0.0,
                     )
 
-                    # Matrix multiplication: (grad_y_block @ x_t_block)
-                    # FIX: Matrix dimensions in the dot product were misaligned
-                    # Original: accumulator += tl.dot(x_t_block, grad_y_block.T)
+                    # Matrix multiplication: (grad_y_block.T @ x_t_block)
                     accumulator += tl.dot(
                         grad_y_block.to(
                             tl.float32
@@ -439,11 +180,6 @@ def _kernel_grouped_gemm_backward_w(
 
 
 # ======= Backwards for inputs (d_X) ======================================
-@triton.autotune(
-    configs=_CONFIGS,
-    key=["G", "M_bucket", "N", "K"],
-    prune_configs_by={"early_config_prune": early_config_prune},
-)
 @triton.jit
 def _kernel_grouped_gemm_backward_x(
     grad_y_ptr,  # grad of dl/dY [M, N*G]
@@ -459,10 +195,10 @@ def _kernel_grouped_gemm_backward_x(
     NUM_SMS: tl.constexpr,
     USE_TMA_LOAD: tl.constexpr,
     USE_TMA_STORE: tl.constexpr,
-    # tile sizes
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
+    # tile sizes - fixed for H100
+    BLOCK_SIZE_M: tl.constexpr = 64,
+    BLOCK_SIZE_N: tl.constexpr = 64,
+    BLOCK_SIZE_K: tl.constexpr = 32,
 ) -> None:
     """
     Compute gradients with respect to x (input).
@@ -600,6 +336,85 @@ def _kernel_grouped_gemm_backward_x(
             iterated_tiles += 0  # No tiles to process
 
 
+def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
+    """
+    Compute grad_x using pure PyTorch operations.
+    """
+    G = m_sizes.shape[0]
+    M, _ = grad_x.shape
+    N = w.shape[0] // G
+
+    m_start = 0
+    for g in range(G):
+        m_size = m_sizes[g].item()
+        if m_size > 0:
+            m_end = m_start + m_size
+            n_start = g * N
+            n_end = (g + 1) * N
+            grad_x[m_start:m_end] = (
+                grad_output[m_start:m_end, n_start:n_end] @ w[n_start:n_end]
+            )
+        m_start = m_end
+
+
+def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
+    """
+    Compute grad_w using pure PyTorch operations.
+    """
+    G = m_sizes.shape[0]
+    N = grad_w.shape[0] // G
+
+    m_start = 0
+    for g in range(G):
+        m_size = m_sizes[g].item()
+        if m_size > 0:
+            m_end = m_start + m_size
+            n_start = g * N
+            n_end = (g + 1) * N
+            grad_w[n_start:n_end] = (
+                x[m_start:m_end].T @ grad_output[m_start:m_end, n_start:n_end]
+            )
+        m_start = m_end
+
+
+def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
+    """
+    Pure PyTorch implementation of grouped GEMM backward.
+    """
+    logging.info("Using PyTorch fallback for grouped GEMM backward")
+
+    G = m_sizes.shape[0]
+    M, K = x.shape
+    N = w.shape[0] // G
+
+    # Allocate output tensors
+    grad_x = torch.zeros_like(x)
+    grad_w = torch.zeros_like(w)
+
+    # Compute grad_x and grad_w group by group
+    m_start = 0
+    for g in range(G):
+        m_size = m_sizes[g].item()
+        if m_size > 0:
+            m_end = m_start + m_size
+            n_start = g * N
+            n_end = (g + 1) * N
+
+            # grad_x[i] = grad_output[i] @ w
+            grad_x[m_start:m_end] = (
+                grad_output[m_start:m_end, n_start:n_end] @ w[n_start:n_end]
+            )
+
+            # grad_w[j] = x.T @ grad_output[j]
+            grad_w[n_start:n_end] = (
+                x[m_start:m_end].T @ grad_output[m_start:m_end, n_start:n_end]
+            )
+
+        m_start = m_end
+
+    return grad_x, grad_w
+
+
 def grouped_gemm_backward(
     grad_output: torch.Tensor,
     x: torch.Tensor,
@@ -608,8 +423,7 @@ def grouped_gemm_backward(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Backward pass for grouped matrix multiplication.
-
-    Computes gradients with respect to x and w.
+    Uses fixed configurations for H100 GPUs to simplify debugging.
 
     Args:
         grad_output: Gradient with respect to output, shape [M, N*G]
@@ -620,18 +434,31 @@ def grouped_gemm_backward(
     Returns:
         Tuple of gradients with respect to x and w: (grad_x, grad_w)
     """
-    if not hasattr(torch.cuda, "current_device"):
-        raise RuntimeError("CUDA not available for backward pass")
+    logging.info("Starting grouped_gemm_backward with fixed configurations")
+
+    # Check CUDA availability
+    if not torch.cuda.is_available():
+        logging.error("CUDA not available for backward pass")
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     # Get GPU parameters
     device_props = torch.cuda.get_device_properties("cuda")
     if device_props.major < 9:
-        raise RuntimeError("H100 or newer GPU required for grouped GEMM")
+        logging.warning(
+            "H100 or newer GPU required for optimized grouped GEMM, falling back to PyTorch"
+        )
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
-    if not hasattr(tl.extra, "cuda"):
-        raise NotImplementedError("TMA support is required but not available")
+    # Check TMA support
+    has_tma = hasattr(tl.extra, "cuda")
+    if not has_tma:
+        logging.warning(
+            "TMA support is required but not available, falling back to PyTorch"
+        )
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     G = m_sizes.shape[0]
+    logging.info(f"Group count: {G}")
 
     # Ensure contiguous tensors for efficient memory access
     grad_output = grad_output.contiguous()
@@ -642,223 +469,180 @@ def grouped_gemm_backward(
     M, K = x.shape
     N_times_G, K_w = w.shape
 
+    logging.info(
+        f"Input shapes - x: {x.shape}, w: {w.shape}, grad_output: {grad_output.shape}"
+    )
+
     # Validate dimensions
-    assert K == K_w, f"Input K ({K}) must match weight K ({K_w})"
-    assert (
-        N_times_G % G == 0
-    ), f"Weight dim 0 ({N_times_G}) must be divisible by number of groups ({G})"
+    if K != K_w:
+        logging.error(f"Input K ({K}) must match weight K ({K_w})")
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+
+    if N_times_G % G != 0:
+        logging.error(
+            f"Weight dim 0 ({N_times_G}) must be divisible by number of groups ({G})"
+        )
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     # Calculate N - output dimension per group
     N = N_times_G // G
+    logging.info(f"N per group: {N}")
 
     # Verify grad_output shape
     expected_grad_output_shape = (M, N_times_G)
-    assert grad_output.shape == expected_grad_output_shape, (
-        f"grad_output shape mismatch: got {grad_output.shape}, "
-        f"expected {expected_grad_output_shape}"
-    )
-
-    # Transpose x and w for backward computation
-    x_t = x.T.contiguous()  # Shape: [K, M]
-    w_t = w.T.contiguous()  # Shape: [K, N*G]
-
-    # Allocate output tensors with correct shapes
-    grad_x = torch.empty_like(x)
-    grad_w = torch.empty_like(w)
-
-    # Configure kernel parameters
-    NUM_SMS = device_props.multi_processor_count
-    USE_TMA_LOAD = True  # Use TMA for loading
-    USE_TMA_STORE = True  # Disable TMA store for better compatibility
-
-    # Setup TMA descriptors
-    desc_helper = TmaAutoTuneHelper()
-    assert desc_helper, "TMA support is required but not available"
-
-    # Create descriptors for all tensors
-    desc_helper.init_tma_descriptor("grad_output")
-    desc_helper.init_tma_descriptor("w_t")
-    desc_helper.init_tma_descriptor("x_t")
-
-    # Get pointers to descriptors
-    grad_y_ptr = desc_helper.get_tma_descriptor_kernel_param("grad_output")
-    w_t_ptr = desc_helper.get_tma_descriptor_kernel_param("w_t")
-    x_t_ptr = desc_helper.get_tma_descriptor_kernel_param("x_t")
-
-    # Allocate workspace for TMA descriptors
-    workspace = torch.empty(
-        (NUM_SMS * 128),  # TMA_SIZE
-        device=x.device,
-        dtype=torch.uint8,
-    )
-
-    # Setup grid for grad_x kernel
-
-    def grid_x(META):
-        # Configure TMA descriptor for grad_output
-        nonlocal desc_helper
-        try:
-            desc_helper.fill_2d_tma_descriptor(
-                "grad_output",
-                grad_output.data_ptr(),
-                M,
-                N_times_G,
-                META["BLOCK_SIZE_M"],
-                META["BLOCK_SIZE_K"],
-                grad_output.element_size(),
-            )
-
-            # Configure TMA descriptor for w_t
-            desc_helper.fill_2d_tma_descriptor(
-                "w_t",
-                w_t.data_ptr(),
-                K,
-                N_times_G,
-                META["BLOCK_SIZE_N"],
-                META["BLOCK_SIZE_K"],
-                w_t.element_size(),
-            )
-        except Exception as e:
-            print(f"Error in TMA descriptor setup for backward_x: {e}")
-            # Continue even if descriptor setup fails
-
-        # Always return a grid configuration
-        return (NUM_SMS,)
-
-    # Setup grid for grad_w kernel
-    def grid_w(META):
-        # Configure TMA descriptor for x_t
-        nonlocal desc_helper
-        try:
-            desc_helper.fill_2d_tma_descriptor(
-                "x_t",
-                x_t.data_ptr(),
-                K,
-                M,
-                META["BLOCK_SIZE_N"],
-                META["BLOCK_SIZE_K"],
-                x_t.element_size(),
-            )
-
-            # Configure TMA descriptor for grad_output
-            desc_helper.fill_2d_tma_descriptor(
-                "grad_output",
-                grad_output.data_ptr(),
-                M,
-                N_times_G,
-                META["BLOCK_SIZE_K"],
-                META["BLOCK_SIZE_M"],
-                grad_output.element_size(),
-            )
-        except Exception as e:
-            print(f"Error in TMA descriptor setup for backward_w: {e}")
-            # Continue even if descriptor setup fails
-
-        # Always return a grid configuration
-        return (NUM_SMS,)
-
-    # Use the next power of 2 for M to avoid alignment issues
-    M_bucket = triton.next_power_of_2(M)
-
-    # First compute grad_x: grad_y @ w_t.T
-    """_kernel_grouped_gemm_backward_x[grid_x](
-        grad_y_ptr,
-        w_t_ptr,
-        grad_x,
-        workspace,
-        m_sizes,
-        G,
-        M_bucket,
-        N,  # N per group
-        K,
-        NUM_SMS,
-        USE_TMA_LOAD,
-        USE_TMA_STORE,
-    )
-
-    # Then compute grad_w: x_t.T @ grad_y
-    _kernel_grouped_gemm_backward_w[grid_w](
-        x_t_ptr,
-        grad_y_ptr,
-        grad_w,
-        workspace,
-        m_sizes,
-        G,
-        M_bucket,
-        N,  # N per group
-        K,
-        NUM_SMS,
-        USE_TMA_LOAD,
-        USE_TMA_STORE,
-    )
-    """
-    # First compute grad_x: grad_y @ w_t.T
-    try:
-        _kernel_grouped_gemm_backward_x[grid_x](
-            grad_y_ptr,
-            w_t_ptr,
-            grad_x,
-            workspace,
-            m_sizes,
-            G,
-            M_bucket,
-            N,  # N per group
-            K,
-            NUM_SMS,
-            USE_TMA_LOAD,
-            USE_TMA_STORE,
+    if grad_output.shape != expected_grad_output_shape:
+        logging.error(
+            f"grad_output shape mismatch: got {grad_output.shape}, expected {expected_grad_output_shape}"
         )
-    except Exception as e:
-        print(f"Error in backward_x kernel: {e}")
-        # Fallback to PyTorch implementation
-        m_start = 0
-        for g in range(G):
-            m_size = m_sizes[g].item()
-            if m_size > 0:
-                m_end = m_start + m_size
-                n_start = g * N
-                n_end = (g + 1) * N
-                grad_x[m_start:m_end] = (
-                    grad_output[m_start:m_end, n_start:n_end] @ w[n_start:n_end]
-                )
-            m_start = m_end
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
+    # Try triton-based implementation with fallback
     try:
-        _kernel_grouped_gemm_backward_w[grid_w](
-            x_t_ptr,
-            grad_y_ptr,
-            grad_w,
-            workspace,
-            m_sizes,
-            G,
-            M_bucket,
-            N,  # N per group
-            K,
-            NUM_SMS,
-            USE_TMA_LOAD,
-            USE_TMA_STORE,
-        )
-    except Exception as e:
-        print(f"Error in backward_w kernel: {e}")
-        # Fallback to PyTorch implementation
-        m_start = 0
-        for g in range(G):
-            m_size = m_sizes[g].item()
-            if m_size > 0:
-                m_end = m_start + m_size
-                n_start = g * N
-                n_end = (g + 1) * N
-                grad_w[n_start:n_end] = (
-                    x[m_start:m_end].T @ grad_output[m_start:m_end, n_start:n_end]
+        # Allocate output tensors with correct shapes
+        grad_x = torch.empty_like(x)
+        grad_w = torch.empty_like(w)
+
+        # Transpose x and w for backward computation
+        x_t = x.T.contiguous()  # Shape: [K, M]
+        w_t = w.T.contiguous()  # Shape: [K, N*G]
+
+        # Configure kernel parameters
+        NUM_SMS = device_props.multi_processor_count
+        USE_TMA_LOAD = True  # Use TMA for loading
+        USE_TMA_STORE = False  # Disable TMA store for better compatibility
+
+        # Use the next power of 2 for M to avoid alignment issues
+        M_bucket = triton.next_power_of_2(M)
+
+        logging.info(f"M_bucket: {M_bucket}, NUM_SMS: {NUM_SMS}")
+
+        # Setup TMA descriptors
+        try:
+            desc_helper = TmaAutoTuneHelper()
+
+            # Create descriptors for all tensors
+            desc_helper.init_tma_descriptor("grad_output")
+            desc_helper.init_tma_descriptor("w_t")
+            desc_helper.init_tma_descriptor("x_t")
+
+            # Get pointers to descriptors
+            grad_y_ptr = desc_helper.get_tma_descriptor_kernel_param("grad_output")
+            w_t_ptr = desc_helper.get_tma_descriptor_kernel_param("w_t")
+            x_t_ptr = desc_helper.get_tma_descriptor_kernel_param("x_t")
+
+            # Allocate workspace for TMA descriptors
+            workspace = torch.empty((NUM_SMS * 128), device=x.device, dtype=torch.uint8)
+
+            # Setup TMA descriptors
+            try:
+                # Configure TMA descriptor for grad_output
+                desc_helper.fill_2d_tma_descriptor(
+                    "grad_output",
+                    grad_output.data_ptr(),
+                    M,
+                    N_times_G,
+                    64,  # BLOCK_SIZE_M
+                    32,  # BLOCK_SIZE_K
+                    grad_output.element_size(),
                 )
-            m_start = m_end
 
-    # Verify output shapes
-    assert (
-        grad_x.shape == x.shape
-    ), f"grad_x shape mismatch: got {grad_x.shape}, expected {x.shape}"
-    assert (
-        grad_w.shape == w.shape
-    ), f"grad_w shape mismatch: got {grad_w.shape}, expected {w.shape}"
+                # Configure TMA descriptor for w_t
+                desc_helper.fill_2d_tma_descriptor(
+                    "w_t",
+                    w_t.data_ptr(),
+                    K,
+                    N_times_G,
+                    64,  # BLOCK_SIZE_N
+                    32,  # BLOCK_SIZE_K
+                    w_t.element_size(),
+                )
 
-    return grad_x, grad_w
+                # Configure TMA descriptor for x_t
+                desc_helper.fill_2d_tma_descriptor(
+                    "x_t",
+                    x_t.data_ptr(),
+                    K,
+                    M,
+                    64,  # BLOCK_SIZE_N
+                    32,  # BLOCK_SIZE_K
+                    x_t.element_size(),
+                )
+            except Exception as e:
+                logging.error(f"Error in TMA descriptor setup: {e}")
+                return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+
+            # Try computing grad_x using triton kernel
+            try:
+                logging.info("Computing grad_x with triton kernel")
+
+                # Fixed grid size based on SM count
+                # grid = (NUM_SMS,)
+                grid = (min(NUM_SMS, 4),)
+
+                _kernel_grouped_gemm_backward_x[grid](
+                    grad_y_ptr,
+                    w_t_ptr,
+                    grad_x,
+                    workspace,
+                    m_sizes,
+                    G,
+                    M_bucket,
+                    N,  # N per group
+                    K,
+                    NUM_SMS,
+                    USE_TMA_LOAD,
+                    USE_TMA_STORE,
+                )
+                logging.info("grad_x computation successful with triton")
+            except Exception as e:
+                logging.error(f"Error in backward_x kernel: {e}")
+                logging.info("Falling back to PyTorch for grad_x")
+                _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
+
+            # Try computing grad_w using triton kernel
+            try:
+                logging.info("Computing grad_w with triton kernel")
+
+                # Fixed grid size based on SM count
+                # grid = (NUM_SMS,)
+                grid = (min(NUM_SMS, 4),)
+
+                _kernel_grouped_gemm_backward_w[grid](
+                    x_t_ptr,
+                    grad_y_ptr,
+                    grad_w,
+                    workspace,
+                    m_sizes,
+                    G,
+                    M_bucket,
+                    N,  # N per group
+                    K,
+                    NUM_SMS,
+                    USE_TMA_LOAD,
+                    USE_TMA_STORE,
+                )
+                logging.info("grad_w computation successful with triton")
+            except Exception as e:
+                logging.error(f"Error in backward_w kernel: {e}")
+                logging.info("Falling back to PyTorch for grad_w")
+                _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
+
+        except Exception as e:
+            logging.error(f"TMA descriptor setup failed: {e}")
+            logging.info("Falling back to PyTorch implementation")
+            return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+
+        # Verify output shapes
+        assert (
+            grad_x.shape == x.shape
+        ), f"grad_x shape mismatch: got {grad_x.shape}, expected {x.shape}"
+        assert (
+            grad_w.shape == w.shape
+        ), f"grad_w shape mismatch: got {grad_w.shape}, expected {w.shape}"
+
+        return grad_x, grad_w
+
+    except Exception as e:
+        logging.error(f"Unexpected error in grouped_gemm_backward: {e}")
+        logging.info("Falling back to PyTorch implementation")
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
