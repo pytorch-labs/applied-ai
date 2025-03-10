@@ -54,138 +54,137 @@ def _kernel_grouped_gemm_backward_x(
     - For group g: w_g is [N, K]
     - For group g: grad_x_g is [m_sizes[g], K]
     """
-    tidx = tl.program_id(0)
+    # Get program ID and calculate SM ID (for work distribution)
+    sm_id = tl.program_id(0)
+
+    # Set data type for computation
     dtype = grad_x_ptr.dtype.element_ty
+
+    # TMA constants
     TMA_SIZE: tl.constexpr = 128
+    c_desc_ptr = None
 
-    # Initialize workspace pointer if using TMA store
     if USE_TMA_STORE:
-        c_desc_ptr = workspace + tidx * TMA_SIZE
-    else:
-        c_desc_ptr = None
+        c_desc_ptr = workspace + sm_id * TMA_SIZE
 
-    M_end_offset = 0
-    iterated_tiles = 0
+    # Process groups one by one
+    m_start_offset = 0
+    tiles_processed = 0
 
     for g in range(G):
-        # For each group
-        M_start_offset = M_end_offset
+        # Get the size of current group
         m_size = tl.load(m_sizes + g)
-        M_end_offset = M_start_offset + m_size
 
         # Only process if m_size > 0
         if m_size > 0:
-            # N_start_offset is where this group's weights start in the N*G dimension
-            N_start_offset = g * N
+            # Calculate N offset for this group
+            n_start_offset = g * N
 
-            # Calculate tiles for this group
-            num_m_tiles = tl.cdiv(
-                m_size, BLOCK_SIZE_M
-            )  # Tiles along M dimension (input)
-            num_k_tiles = tl.cdiv(K, BLOCK_SIZE_K)  # Tiles along K dimension (output)
-            num_tiles = num_m_tiles * num_k_tiles
+            # Calculate number of tiles for this group
+            num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
+            num_k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+            total_group_tiles = num_m_tiles * num_k_tiles
 
-            # Setup TMA descriptor for output if using TMA
+            # Set up TMA descriptor for output if using TMA
             if USE_TMA_STORE:
                 tl.extra.cuda.experimental_device_tensormap_create2d(
                     desc_ptr=c_desc_ptr,
-                    global_address=grad_x_ptr + M_start_offset * K,
+                    global_address=grad_x_ptr + m_start_offset * K,
                     load_size=[BLOCK_SIZE_M, BLOCK_SIZE_K],
                     global_size=[m_size, K],
                     element_ty=dtype,
                 )
                 tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # Process tiles
-            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-                gidx = tidx - iterated_tiles
+            # Process tiles for this group
+            while (
+                sm_id >= tiles_processed and sm_id < tiles_processed + total_group_tiles
+            ):
+                # Calculate local tile ID within this group
+                local_tile_id = sm_id - tiles_processed
 
                 # Calculate tile indices
-                tile_m_idx = gidx % num_m_tiles  # Tile index along M dimension
-                tile_k_idx = gidx // num_m_tiles  # Tile index along K dimension
+                tile_m_idx = local_tile_id % num_m_tiles
+                tile_k_idx = local_tile_id // num_m_tiles
 
-                # Initialize accumulator for this tile
+                # Create accumulator tensor
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=tl.float32)
 
-                # Calculate offsets for better memory access
-                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(
-                    0, BLOCK_SIZE_M
-                )  # M dimension
-                offs_k = tile_k_idx * BLOCK_SIZE_K + tl.arange(
-                    0, BLOCK_SIZE_K
-                )  # K dimension
+                # Calculate offsets
+                offs_m = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                offs_k = tile_k_idx * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
 
-                # Create masks for boundary checking
+                # Create masks for boundary conditions
                 m_mask = offs_m < m_size
                 k_mask = offs_k < K
 
-                # Loop over the reduction dimension (N)
+                # Process the reduction dimension (N) in blocks
                 for n_offset in range(0, N, BLOCK_SIZE_N):
-                    # Handle boundary conditions for the reduction dimension
+                    # Calculate effective block size for N (handle boundary)
                     n_size = tl.minimum(BLOCK_SIZE_N, N - n_offset)
+
+                    # Create indices and mask for N dimension
                     offs_n = tl.arange(0, BLOCK_SIZE_N)
                     n_mask = offs_n < n_size
 
-                    # Load grad_output [M, N*G] block
-                    # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_N]
+                    # Load grad_output block
                     grad_output_block = tl.load(
                         grad_output_ptr
-                        + (M_start_offset + offs_m[:, None]) * (N * G)
-                        + (N_start_offset + n_offset + offs_n[None, :]),
+                        + (m_start_offset + offs_m[:, None]) * (N * G)
+                        + (n_start_offset + n_offset + offs_n[None, :]),
                         mask=m_mask[:, None] & n_mask[None, :],
                         other=0.0,
                     )
 
-                    # Load w [N*G, K] block
-                    # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                    # Load weights block
                     w_block = tl.load(
                         w_ptr
-                        + (N_start_offset + n_offset + offs_n[:, None]) * K
+                        + (n_start_offset + n_offset + offs_n[:, None]) * K
                         + offs_k[None, :],
                         mask=n_mask[:, None] & k_mask[None, :],
                         other=0.0,
                     )
 
-                    # Matrix multiplication: grad_x = grad_output @ w
-                    # For this operation we need:
-                    # - grad_output_block with shape [BLOCK_SIZE_M, BLOCK_SIZE_N]
-                    # - w_block with shape [BLOCK_SIZE_N, BLOCK_SIZE_K]
-                    # Result: [BLOCK_SIZE_M, BLOCK_SIZE_K]
+                    # Perform matrix multiplication
+                    # grad_x = grad_output @ w
+                    # Convert to float32 for higher precision in compute
+                    grad_output_f32 = grad_output_block.to(tl.float32)
+                    w_f32 = w_block.to(tl.float32)
+
+                    # Accumulate the partial product
                     accumulator += tl.dot(
-                        grad_output_block.to(
-                            tl.float32
-                        ),  # [BLOCK_SIZE_M, BLOCK_SIZE_N]
-                        w_block.to(tl.float32),  # [BLOCK_SIZE_N, BLOCK_SIZE_K]
-                        allow_tf32=True,
+                        grad_output_f32,
+                        w_f32,
+                        allow_tf32=False,  # Disallow tf32 for higher precision
                     )
 
-                # Store result to grad_x
+                # Store the result
                 if USE_TMA_STORE:
-                    # Use TMA to store the result
-                    m_offset = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                    k_offset = (tile_k_idx * BLOCK_SIZE_K).to(tl.int32)
+                    # Use TMA for storing result
+                    m_pos = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    k_pos = (tile_k_idx * BLOCK_SIZE_K).to(tl.int32)
 
-                    # Convert to output dtype and store
                     tl._experimental_descriptor_store(
-                        c_desc_ptr,
-                        accumulator.to(dtype),
-                        [m_offset, k_offset],
+                        c_desc_ptr, accumulator.to(dtype), [m_pos, k_pos]
                     )
                 else:
-                    # Manual store with boundary checking
+                    # Direct store with boundary check
                     tl.store(
                         grad_x_ptr
-                        + (M_start_offset + offs_m[:, None]) * K
+                        + (m_start_offset + offs_m[:, None]) * K
                         + offs_k[None, :],
                         accumulator.to(dtype),
                         mask=m_mask[:, None] & k_mask[None, :],
                     )
 
-                # Move to next tile
-                tidx += NUM_SMS
+                # Move to next tile (round-robin across SMs)
+                sm_id += NUM_SMS
 
-            # Update tiles processed counter
-            iterated_tiles += num_tiles
+            # Update tile counter and m_start_offset for next group
+            tiles_processed += total_group_tiles
+
+        # Always update m_start_offset even if m_size is 0
+        m_start_offset += m_size
 
 
 @triton.jit
@@ -224,136 +223,137 @@ def _kernel_grouped_gemm_backward_w(
     - For group g: grad_output_g is [m_sizes[g], N]
     - For group g: grad_w_g is [N, K]
     """
-    tidx = tl.program_id(0)
+    # Get program ID and calculate SM ID (for work distribution)
+    sm_id = tl.program_id(0)
+
+    # Set data type for computation
     dtype = grad_w_ptr.dtype.element_ty
+
+    # TMA constants
     TMA_SIZE: tl.constexpr = 128
+    c_desc_ptr = None
 
-    # Initialize workspace pointer if using TMA store
     if USE_TMA_STORE:
-        c_desc_ptr = workspace + tidx * TMA_SIZE
-    else:
-        c_desc_ptr = None
+        c_desc_ptr = workspace + sm_id * TMA_SIZE
 
-    M_end_offset = 0
-    iterated_tiles = 0
+    # Process groups one by one
+    m_start_offset = 0
+    tiles_processed = 0
 
     for g in range(G):
-        # For each group
-        M_start_offset = M_end_offset
+        # Get the size of current group
         m_size = tl.load(m_sizes + g)
-        M_end_offset = M_start_offset + m_size
 
         # Only process if m_size > 0
         if m_size > 0:
-            # N_start_offset is where this group's weights start in the N*G dimension
-            N_start_offset = g * N
+            # Calculate N offset for this group
+            n_start_offset = g * N
 
-            # Calculate tiles for this group
-            num_n_tiles = tl.cdiv(N, BLOCK_SIZE_N)  # Tiles along N dimension (output)
-            num_k_tiles = tl.cdiv(K, BLOCK_SIZE_K)  # Tiles along K dimension (output)
-            num_tiles = num_n_tiles * num_k_tiles
+            # Calculate number of tiles for this group
+            num_n_tiles = tl.cdiv(N, BLOCK_SIZE_N)
+            num_k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+            total_group_tiles = num_n_tiles * num_k_tiles
 
-            # Setup TMA descriptor for output if using TMA
+            # Set up TMA descriptor for output if using TMA
             if USE_TMA_STORE:
                 tl.extra.cuda.experimental_device_tensormap_create2d(
                     desc_ptr=c_desc_ptr,
-                    global_address=grad_w_ptr + N_start_offset * K,
+                    global_address=grad_w_ptr + n_start_offset * K,
                     load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K],
                     global_size=[N, K],
                     element_ty=dtype,
                 )
                 tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
-            # Process tiles
-            while tidx >= iterated_tiles and tidx < iterated_tiles + num_tiles:
-                gidx = tidx - iterated_tiles
+            # Process tiles for this group
+            while (
+                sm_id >= tiles_processed and sm_id < tiles_processed + total_group_tiles
+            ):
+                # Calculate local tile ID within this group
+                local_tile_id = sm_id - tiles_processed
 
                 # Calculate tile indices
-                tile_n_idx = gidx % num_n_tiles  # Tile index along N dimension
-                tile_k_idx = gidx // num_n_tiles  # Tile index along K dimension
+                tile_n_idx = local_tile_id % num_n_tiles
+                tile_k_idx = local_tile_id // num_n_tiles
 
-                # Initialize accumulator for this tile
+                # Create accumulator tensor
                 accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_K), dtype=tl.float32)
 
-                # Calculate offsets for better memory access
-                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(
-                    0, BLOCK_SIZE_N
-                )  # N dimension
-                offs_k = tile_k_idx * BLOCK_SIZE_K + tl.arange(
-                    0, BLOCK_SIZE_K
-                )  # K dimension
+                # Calculate offsets
+                offs_n = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+                offs_k = tile_k_idx * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
 
-                # Create masks for boundary checking
+                # Create masks for boundary conditions
                 n_mask = offs_n < N
                 k_mask = offs_k < K
 
-                # Loop over the reduction dimension (M)
+                # Process the reduction dimension (M) in blocks
                 for m_offset in range(0, m_size, BLOCK_SIZE_M):
-                    # Handle boundary conditions for the reduction dimension
+                    # Calculate effective block size for M (handle boundary)
                     m_size_block = tl.minimum(BLOCK_SIZE_M, m_size - m_offset)
+
+                    # Create indices and mask for M dimension
                     offs_m = tl.arange(0, BLOCK_SIZE_M)
                     m_mask = offs_m < m_size_block
 
-                    # Load grad_output [M, N*G] block
-                    # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_N]
+                    # Load grad_output block [M, N]
                     grad_output_block = tl.load(
                         grad_output_ptr
-                        + (M_start_offset + m_offset + offs_m[:, None]) * (N * G)
-                        + (N_start_offset + offs_n[None, :]),
+                        + (m_start_offset + m_offset + offs_m[:, None]) * (N * G)
+                        + (n_start_offset + offs_n[None, :]),
                         mask=m_mask[:, None] & n_mask[None, :],
                         other=0.0,
                     )
 
-                    # Load x [M, K] block
-                    # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
+                    # Load x block [M, K]
                     x_block = tl.load(
                         x_ptr
-                        + (M_start_offset + m_offset + offs_m[:, None]) * K
+                        + (m_start_offset + m_offset + offs_m[:, None]) * K
                         + offs_k[None, :],
                         mask=m_mask[:, None] & k_mask[None, :],
                         other=0.0,
                     )
 
-                    # Matrix multiplication: grad_w = grad_output.T @ x
-                    # For this operation we need:
-                    # - grad_output_block.T with shape [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                    # - x_block with shape [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                    # Result: [BLOCK_SIZE_N, BLOCK_SIZE_K]
+                    # Perform matrix multiplication
+                    # grad_w = grad_output.T @ x
+                    # Convert to float32 for higher precision in compute
+                    grad_output_f32 = grad_output_block.to(tl.float32)
+                    x_f32 = x_block.to(tl.float32)
+
+                    # Accumulate the partial product
                     accumulator += tl.dot(
-                        grad_output_block.to(
-                            tl.float32
-                        ).T,  # [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                        x_block.to(tl.float32),  # [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                        allow_tf32=True,
+                        grad_output_f32.T,  # Transpose for correct matrix multiplication
+                        x_f32,
+                        allow_tf32=False,  # Disallow tf32 for higher precision
                     )
 
-                # Store result to grad_w
+                # Store the result
                 if USE_TMA_STORE:
-                    # Use TMA to store the result
-                    n_offset = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
-                    k_offset = (tile_k_idx * BLOCK_SIZE_K).to(tl.int32)
+                    # Use TMA for storing result
+                    n_pos = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                    k_pos = (tile_k_idx * BLOCK_SIZE_K).to(tl.int32)
 
-                    # Convert to output dtype and store
                     tl._experimental_descriptor_store(
-                        c_desc_ptr,
-                        accumulator.to(dtype),
-                        [n_offset, k_offset],
+                        c_desc_ptr, accumulator.to(dtype), [n_pos, k_pos]
                     )
                 else:
-                    # Manual store with boundary checking
+                    # Direct store with boundary check
                     tl.store(
                         grad_w_ptr
-                        + (N_start_offset + offs_n[:, None]) * K
+                        + (n_start_offset + offs_n[:, None]) * K
                         + offs_k[None, :],
                         accumulator.to(dtype),
                         mask=n_mask[:, None] & k_mask[None, :],
                     )
 
-                # Move to next tile
-                tidx += NUM_SMS
+                # Move to next tile (round-robin across SMs)
+                sm_id += NUM_SMS
 
-            # Update tiles processed counter
-            iterated_tiles += num_tiles
+            # Update tile counter and m_start_offset for next group
+            tiles_processed += total_group_tiles
+
+        # Always update m_start_offset even if m_size is 0
+        m_start_offset += m_size
 
 
 # =================================================================================================
@@ -576,18 +576,20 @@ def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
     grad_x = torch.zeros_like(x)
     grad_w = torch.zeros_like(w)
 
-    # Compute grad_x and grad_w group by group
+    # Use the helper functions to compute gradients with high precision
     _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
     _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
 
-    # Double-check output tensors for NaN or Inf values
+    # Verify outputs for NaN/Inf as a final safety check
     if torch.isnan(grad_x).any() or torch.isinf(grad_x).any():
-        logging.error("Found NaN or Inf values in grad_x")
-        grad_x = torch.nan_to_num(grad_x, nan=0.0, posinf=1e5, neginf=-1e5)
+        logging.warning(
+            "NaN or Inf detected in grad_x after PyTorch fallback computation"
+        )
 
     if torch.isnan(grad_w).any() or torch.isinf(grad_w).any():
-        logging.error("Found NaN or Inf values in grad_w")
-        grad_w = torch.nan_to_num(grad_w, nan=0.0, posinf=1e5, neginf=-1e5)
+        logging.warning(
+            "NaN or Inf detected in grad_w after PyTorch fallback computation"
+        )
 
     return grad_x, grad_w
 
@@ -613,6 +615,8 @@ def grouped_gemm_backward(
     """
     import logging
 
+    import torch
+
     logging.info("Starting grouped_gemm_backward with fixed configurations")
 
     # Validate input dimensions first to catch issues early
@@ -626,10 +630,8 @@ def grouped_gemm_backward(
 
     if K_x != K_w:
         logging.warning(f"K dimension mismatch: x has K={K_x}, w has K={K_w}")
-
-    # Determine whether we have a numerical precision challenge
-    if is_large_computation:
-        logging.info("Using high precision computation for large matrices")
+        # For mismatched K dimensions, use the PyTorch fallback
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     # Check CUDA availability
     if not torch.cuda.is_available():
@@ -644,6 +646,114 @@ def grouped_gemm_backward(
         )
         return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
-    # For now, let's just use the PyTorch fallback which we've verified works correctly
-    # We can reintegrate the Triton kernels later when they're properly fixed
-    return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+    # Check TMA support
+    has_tma = hasattr(tl.extra, "cuda")
+    if not has_tma:
+        logging.warning(
+            "TMA support is required but not available, falling back to PyTorch"
+        )
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+
+    # In case of very large dimensions, use the PyTorch fallback for reliability
+    if is_large_computation and (M > 1024 or N_times_G > 1024 or K_x > 512):
+        logging.warning(
+            "Extremely large dimensions, falling back to PyTorch for reliability"
+        )
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+
+    # Ensure contiguous tensors for efficient memory access
+    grad_output = grad_output.contiguous()
+    x = x.contiguous()
+    w = w.contiguous()
+    m_sizes = m_sizes.contiguous()
+
+    # Try triton-based implementation with fallback
+    try:
+        # Allocate output tensors with correct shapes
+        grad_x = torch.zeros_like(x)
+        grad_w = torch.zeros_like(w)
+
+        # Configure kernel parameters
+        NUM_SMS = min(
+            device_props.multi_processor_count, 16
+        )  # Limit to avoid overloading
+        USE_TMA_LOAD = True  # Use TMA for loading
+        USE_TMA_STORE = False  # Disable TMA store for better compatibility
+
+        # Use the next power of 2 for M to avoid alignment issues
+        M_bucket = triton.next_power_of_2(M)
+
+        logging.info(f"M_bucket: {M_bucket}, NUM_SMS: {NUM_SMS}")
+
+        # Allocate workspace for TMA descriptors
+        workspace = torch.empty((NUM_SMS * 128), device=x.device, dtype=torch.uint8)
+
+        # Try computing grad_x using triton kernel
+        try:
+            logging.info("Computing grad_x with triton kernel")
+
+            # Fixed grid size based on SM count
+            grid = (NUM_SMS,)
+
+            _kernel_grouped_gemm_backward_x[grid](
+                grad_output,
+                w,
+                grad_x,
+                workspace,
+                m_sizes,
+                G,
+                M_bucket,
+                N_times_G // G,  # N per group
+                K_x,
+                NUM_SMS,
+                USE_TMA_LOAD,
+                USE_TMA_STORE,
+            )
+            logging.info("grad_x computation successful with triton")
+        except Exception as e:
+            logging.error(f"Error in backward_x kernel: {e}")
+            logging.info("Falling back to PyTorch for grad_x")
+            _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
+
+        # Try computing grad_w using triton kernel
+        try:
+            logging.info("Computing grad_w with triton kernel")
+
+            # Fixed grid size based on SM count
+            grid = (NUM_SMS,)
+
+            _kernel_grouped_gemm_backward_w[grid](
+                x,
+                grad_output,
+                grad_w,
+                workspace,
+                m_sizes,
+                G,
+                M_bucket,
+                N_times_G // G,  # N per group
+                K_x,
+                NUM_SMS,
+                USE_TMA_LOAD,
+                USE_TMA_STORE,
+            )
+            logging.info("grad_w computation successful with triton")
+        except Exception as e:
+            logging.error(f"Error in backward_w kernel: {e}")
+            logging.info("Falling back to PyTorch for grad_w")
+            _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
+
+        # Validate results for NaN/Inf
+        if torch.isnan(grad_x).any() or torch.isinf(grad_x).any():
+            logging.warning("NaN or Inf detected in grad_x, falling back to PyTorch")
+            _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
+
+        if torch.isnan(grad_w).any() or torch.isinf(grad_w).any():
+            logging.warning("NaN or Inf detected in grad_w, falling back to PyTorch")
+            _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
+
+        return grad_x, grad_w
+
+    except Exception as e:
+        logging.error(f"Unexpected error in grouped_gemm_backward: {e}")
+        logging.info("Falling back to PyTorch implementation")
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
