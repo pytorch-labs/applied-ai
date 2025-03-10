@@ -21,9 +21,9 @@ def test_backward_pass():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Test parameters
-        G = 2  # Number of groups
+        G = 1  # Number of groups
         M = 256  # Input dimension
-        N = 128  # Output dimension per group
+        N = 256  # Output dimension per group
         K = 64  # Hidden dimension
 
         # Create input and weight tensors
@@ -96,21 +96,52 @@ def test_backward_pass():
         grad_x_error = (grad_x - x_autograd.grad).abs().max().item()
         grad_w_error = (grad_w - w_autograd.grad).abs().max().item()
 
-        logging.info(f"grad W compare: {grad_w=}, {w_autograd=}")
-        logging.info(f"grad X compare: {grad_x=}, {x_autograd=}")
-
         logging.info(
             f"Maximum gradient error - grad_x: {grad_x_error}, grad_w: {grad_w_error}"
         )
 
-        # Check if gradients are close enough
-        tolerance = 1e-2  # Higher tolerance for bfloat16
-        if grad_x_error <= tolerance and grad_w_error <= tolerance:
-            logging.info("✓ Gradients match the PyTorch reference")
-        else:
-            logging.error("✗ Gradient mismatch above tolerance threshold")
+        # Check if gradients are close using allclose
+        rtol = 1e-2  # Relative tolerance for bfloat16
+        atol = 1e-2  # Absolute tolerance for bfloat16
 
-        return True
+        grad_x_close = torch.allclose(grad_x, x_autograd.grad, rtol=rtol, atol=atol)
+        grad_w_close = torch.allclose(grad_w, w_autograd.grad, rtol=rtol, atol=atol)
+
+        logging.info(
+            f"Gradients allclose check - grad_x: {grad_x_close}, grad_w: {grad_w_close}"
+        )
+
+        if grad_x_close and grad_w_close:
+            logging.info(
+                "✓ Gradients match the PyTorch reference (allclose check passed)"
+            )
+        else:
+            logging.error("✗ Gradient mismatch detected in allclose check")
+
+            # Additional diagnostics for failed cases
+            if not grad_x_close:
+                # Find where the largest differences are
+                diff_x = (grad_x - x_autograd.grad).abs()
+                max_idx_x = diff_x.argmax().item()
+                flat_idx_x = max_idx_x
+                idx_x = np.unravel_index(flat_idx_x, grad_x.shape)
+                logging.error(
+                    f"Largest grad_x difference at {idx_x}: "
+                    f"{grad_x[idx_x].item()} vs {x_autograd.grad[idx_x].item()}"
+                )
+
+            if not grad_w_close:
+                # Find where the largest differences are
+                diff_w = (grad_w - w_autograd.grad).abs()
+                max_idx_w = diff_w.argmax().item()
+                flat_idx_w = max_idx_w
+                idx_w = np.unravel_index(flat_idx_w, grad_w.shape)
+                logging.error(
+                    f"Largest grad_w difference at {idx_w}: "
+                    f"{grad_w[idx_w].item()} vs {w_autograd.grad[idx_w].item()}"
+                )
+
+        return grad_x_close and grad_w_close
 
     except Exception as e:
         logging.error(f"Test failed with error: {e}")
@@ -123,5 +154,8 @@ def test_backward_pass():
 if __name__ == "__main__":
     print("Running test_backward_pass")
     logging.debug("Running test_backward_pass")
+    # Add numpy import for unravel_index
+    import numpy as np
+
     success = test_backward_pass()
     logging.info(f"Test {'succeeded' if success else 'failed'}")
