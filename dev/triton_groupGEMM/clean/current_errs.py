@@ -1,100 +1,166 @@
 """
-Running test_backward_pass
-Test setup - G: 2, M: 128, N: 128, K: 32
-Input x shape: torch.Size([128, 32])
-2025-03-10 08:31:29,705 - INFO - Weight w shape: torch.Size([256, 32])
-2025-03-10 08:31:29,712 - INFO - Group sizes: tensor([64, 64], device='cuda:0', dtype=torch.int32)
-2025-03-10 08:31:29,712 - INFO - Running forward pass
-2025-03-10 08:31:30,277 - INFO - Forward result shape: torch.Size([128, 256])
-2025-03-10 08:31:30,277 - INFO - Created gradient with shape: torch.Size([128, 256])
-2025-03-10 08:31:30,277 - INFO - Running backward pass directly
-2025-03-10 08:31:30,277 - INFO - Starting grouped_gemm_backward with fixed configurations
-2025-03-10 08:31:30,277 - INFO - Using PyTorch fallback for grouped GEMM backward with FP32 precision
-2025-03-10 08:31:30,277 - INFO - PyTorch fallback dims - G: 2, M: 128, N: 128, K_x: 32, K_w: 32
-2025-03-10 08:31:30,362 - INFO - Gradient shapes - grad_x: torch.Size([128, 32]), grad_w: torch.Size([256, 32])
-2025-03-10 08:31:30,362 - INFO - Running PyTorch reference implementation
-2025-03-10 08:31:30,639 - INFO - Comparing gradients with PyTorch reference
-2025-03-10 08:31:30,722 - INFO - grad W compare: grad_w=tensor([[ -2.1094,   7.5000,  -5.9062,  ...,   3.9688,   3.1406,  -3.3438],
-        [ 10.1875,  -1.6719,   3.8281,  ...,   1.9922,  12.1250,   2.0156],
-        [ -8.0625,  -0.2285,   5.7188,  ..., -16.2500,   8.0625,  10.1875],
+Test setup - G: 2, M: 64, N: 128, K: 32
+Input x shape: torch.Size([64, 32])
+2025-03-10 08:48:18,721 - INFO - Weight w shape: torch.Size([256, 32])
+2025-03-10 08:48:18,725 - INFO - Group sizes: tensor([32, 32], device='cuda:0', dtype=torch.int32)
+2025-03-10 08:48:18,725 - INFO - Running forward pass
+2025-03-10 08:48:19,119 - INFO - Forward result shape: torch.Size([64, 256])
+2025-03-10 08:48:19,119 - INFO - Created gradient with shape: torch.Size([64, 256])
+2025-03-10 08:48:19,119 - INFO - Running backward pass directly
+2025-03-10 08:48:19,119 - INFO - Starting grouped_gemm_backward with fixed configurations
+2025-03-10 08:48:19,119 - INFO - Large computation detected: False
+2025-03-10 08:48:19,119 - INFO - Using PyTorch fallback for grouped GEMM backward with high precision
+2025-03-10 08:48:19,119 - INFO - PyTorch fallback dims - G: 2, M: 64, N: 128, K_x: 32, K_w: 32
+2025-03-10 08:48:19,281 - INFO - Gradient shapes - grad_x: torch.Size([64, 32]), grad_w: torch.Size([256, 32])
+2025-03-10 08:48:19,281 - INFO - Running PyTorch reference implementation
+2025-03-10 08:48:19,567 - INFO - Comparing gradients with PyTorch reference
+2025-03-10 08:48:19,644 - INFO - grad W compare: grad_w=tensor([[ -4.5625,  -4.9688,   6.1250,  ...,  10.0625,  -7.0625,  -0.9258],
+        [  0.5430,  -4.5625,  -1.4453,  ...,   1.9297,   1.1484,   8.8750],
+        [  4.9375,   5.1562,   2.2188,  ...,   0.7773, -12.9375,  -0.2578],
         ...,
-        [  0.2383,  -3.7500,   7.3125,  ..., -18.3750,   1.2422, -18.1250],
-        [  9.9375,   4.0938,   9.7500,  ...,  -2.7500,  12.8125,  -2.9531],
-        [ -9.3750, -12.0625,  -7.5312,  ...,  -8.1250,  -0.9688,   7.5312]],
-       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), w_autograd=tensor([[ 0.1807, -2.7500,  2.7656,  ...,  0.8789,  0.4805,  0.4062],
-        [ 0.1465, -0.5117,  1.1250,  ..., -1.8594,  0.1270, -0.5586],
-        [-1.2188,  0.0055,  0.2480,  ...,  2.0625, -0.3438,  0.1318],
+        [ -4.2188,  -7.3750,  -2.1875,  ...,   1.6641,  -0.1338,   9.5000],
+        [ -5.1562,   6.0938,  -7.5938,  ..., -13.5000,   2.2031,   1.2891],
+        [ -5.0938,  10.5625,   9.1250,  ...,  -3.6406,  -2.2188,   4.2500]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), w_autograd=tensor([[ 1.1797, -0.3535,  0.3750,  ...,  0.0684,  0.0271,  0.2148],
+        [ 2.6250,  0.5039, -1.3906,  ..., -0.4277,  2.6719,  1.7578],
+        [-0.5117, -1.2969,  1.4766,  ...,  1.2578, -0.7266, -0.0801],
         ...,
-        [-0.0688,  0.5859, -0.0781,  ..., -2.3594, -0.6094, -0.6250],
-        [ 0.1582,  1.4141, -0.2373,  ..., -1.1953, -1.8125,  1.1094],
-        [ 0.7695, -0.4707,  0.5508,  ..., -0.1768, -1.2266,  0.3594]],
+        [-0.0645,  0.5898, -0.0474,  ..., -0.0869, -0.1328,  0.2715],
+        [-0.4023, -0.7695, -0.9102,  ...,  0.3906, -1.3750, -0.3652],
+        [ 0.2168, -0.0171, -1.0547,  ...,  0.6406,  0.6914, -1.5000]],
        device='cuda:0', dtype=torch.bfloat16, requires_grad=True)
-2025-03-10 08:31:30,724 - INFO - grad X compare: grad_x=tensor([[  0.3711,  -6.4688,   0.1562,  ...,  36.7500,  11.1250,  14.5000],
-        [-12.8750,  -0.1445, -12.9375,  ..., -11.5000,  -7.7500,  10.6250],
-        [ -6.4375,  -3.7344, -16.5000,  ...,   4.5625,  -2.3281,  17.0000],
+2025-03-10 08:48:19,647 - INFO - grad X compare: grad_x=tensor([[ 21.6250, -15.9375,  20.8750,  ...,  -0.0625,  -2.0156,   5.2188],
+        [-21.5000, -20.6250,   7.7188,  ...,  11.6875,  -2.4688, -32.2500],
+        [ -2.9062,   5.7812,   4.4688,  ...,  11.3750,   7.8750,   3.1406],
         ...,
-        [ -2.0156,   2.1875,   1.7031,  ...,  10.3125,   1.4766,  12.9375],
-        [ 13.9375,   2.9688,  12.3125,  ..., -12.8750,  -1.1641,  -8.4375],
-        [  8.4375,  -0.5508, -33.2500,  ...,  20.5000,   5.8125,  -7.1875]],
-       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), x_autograd=tensor([[-0.7305,  0.7031,  0.1738,  ..., -0.3789, -1.2656,  0.2793],
-        [ 1.0547, -0.3066,  0.5977,  ...,  0.4805, -1.7031,  0.7227],
-        [ 0.3008, -1.1797, -0.2598,  ...,  0.4531, -0.0145, -0.1289],
+        [  8.9375,  -5.3750,  25.1250,  ...,  -2.3750,   6.9375, -10.5000],
+        [ 10.7500,  20.8750, -24.5000,  ...,   3.4375,  -3.9375,  -3.8750],
+        [  2.5156,  -4.1250,   2.3594,  ...,   5.5000,  -9.7500, -34.0000]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), x_autograd=tensor([[-0.7656,  1.0391, -0.4512,  ...,  0.1641, -0.8711,  0.6602],
+        [-0.7539,  0.4727, -0.0156,  ...,  0.8867,  0.2344,  0.7461],
+        [ 0.6914, -0.8750, -1.3672,  ..., -0.3184,  1.0938,  0.9961],
         ...,
-        [-1.7266,  0.8242, -0.0400,  ...,  0.2471, -1.3906, -0.9648],
-        [ 3.0156,  1.0000,  0.9531,  ..., -0.4199,  0.7930, -0.9180],
-        [ 0.1953, -1.7109, -0.1006,  ..., -0.1128, -1.6797, -0.0767]],
+        [ 1.0781, -0.7031, -0.9922,  ..., -0.1934, -0.1211,  0.5781],
+        [ 1.8281, -0.0796,  0.2373,  ..., -0.7852, -1.5000, -0.4434],
+        [-0.6641,  0.2246,  0.5234,  ..., -0.2773,  0.5508, -2.2031]],
        device='cuda:0', dtype=torch.bfloat16, requires_grad=True)
-2025-03-10 08:31:30,725 - INFO - Maximum gradient error - grad_x: 0.125, grad_w: 0.001953125
-2025-03-10 08:31:30,725 - ERROR - ✗ Gradient mismatch above tolerance threshold
-2025-03-10 08:31:30,725 - INFO - Test succeeded
+2025-03-10 08:48:19,647 - INFO - Maximum gradient error - grad_x: 0.0, grad_w: 0.0
+2025-03-10 08:48:19,647 - INFO - ✓ Gradients match the PyTorch reference
+2025-03-10 08:48:19,647 - INFO - Test succeeded
 (tritondev) [less@devgpu115.cco2 /data/users/less/applied-ai/dev/triton_groupGEMM/clean (lessw/gg_backward_pass)]$ python fast_debug.py
 TMA benchmarks will be running with experimental grid constant TMA descriptor.
 Running test_backward_pass
-Test setup - G: 2, M: 64, N: 128, K: 32
-Input x shape: torch.Size([64, 32])
-2025-03-10 08:31:45,109 - INFO - Weight w shape: torch.Size([256, 32])
-2025-03-10 08:31:45,111 - INFO - Group sizes: tensor([32, 32], device='cuda:0', dtype=torch.int32)
-2025-03-10 08:31:45,111 - INFO - Running forward pass
-2025-03-10 08:31:45,639 - INFO - Forward result shape: torch.Size([64, 256])
-2025-03-10 08:31:45,639 - INFO - Created gradient with shape: torch.Size([64, 256])
-2025-03-10 08:31:45,639 - INFO - Running backward pass directly
-2025-03-10 08:31:45,639 - INFO - Starting grouped_gemm_backward with fixed configurations
-2025-03-10 08:31:45,639 - INFO - Using PyTorch fallback for grouped GEMM backward with FP32 precision
-2025-03-10 08:31:45,639 - INFO - PyTorch fallback dims - G: 2, M: 64, N: 128, K_x: 32, K_w: 32
-2025-03-10 08:31:45,723 - INFO - Gradient shapes - grad_x: torch.Size([64, 32]), grad_w: torch.Size([256, 32])
-2025-03-10 08:31:45,724 - INFO - Running PyTorch reference implementation
-2025-03-10 08:31:46,008 - INFO - Comparing gradients with PyTorch reference
-2025-03-10 08:31:46,090 - INFO - grad W compare: grad_w=tensor([[  0.3633,   0.1143,   3.2812,  ...,  -2.4219,  -0.3008,   5.5312],
-        [ 10.8125,  -0.1934, -13.1875,  ...,   7.4688,  -1.9531,  -3.6094],
-        [ -6.9375,   5.9062,   6.3750,  ...,  -1.0469,   0.7969,  -4.1875],
+Test setup - G: 2, M: 256, N: 128, K: 32
+Input x shape: torch.Size([256, 32])
+2025-03-10 08:48:49,768 - INFO - Weight w shape: torch.Size([256, 32])
+2025-03-10 08:48:49,770 - INFO - Group sizes: tensor([128, 128], device='cuda:0', dtype=torch.int32)
+2025-03-10 08:48:49,770 - INFO - Running forward pass
+2025-03-10 08:48:50,289 - INFO - Forward result shape: torch.Size([256, 256])
+2025-03-10 08:48:50,289 - INFO - Created gradient with shape: torch.Size([256, 256])
+2025-03-10 08:48:50,289 - INFO - Running backward pass directly
+2025-03-10 08:48:50,289 - INFO - Starting grouped_gemm_backward with fixed configurations
+2025-03-10 08:48:50,289 - INFO - Large computation detected: True
+2025-03-10 08:48:50,289 - INFO - Using high precision computation for large matrices
+2025-03-10 08:48:50,289 - INFO - Using PyTorch fallback for grouped GEMM backward with high precision
+2025-03-10 08:48:50,289 - INFO - PyTorch fallback dims - G: 2, M: 256, N: 128, K_x: 32, K_w: 32
+2025-03-10 08:48:50,373 - INFO - Gradient shapes - grad_x: torch.Size([256, 32]), grad_w: torch.Size([256, 32])
+2025-03-10 08:48:50,374 - INFO - Running PyTorch reference implementation
+2025-03-10 08:48:50,620 - INFO - Comparing gradients with PyTorch reference
+2025-03-10 08:48:50,684 - INFO - grad W compare: grad_w=tensor([[ 12.3125, -10.8125,   7.5312,  ...,  -4.7188,  -8.5000,  -0.0408],
+        [  4.1250,  -6.8125,  -0.5859,  ..., -11.7500,  -1.0078,   0.9844],
+        [-22.3750, -20.7500,  -5.6875,  ...,   3.8906,  15.6250,   4.5938],
         ...,
-        [ -7.4062,  -9.3125,   4.6875,  ...,   1.4062,  -0.1455, -10.6875],
-        [  2.2812,  -1.1406,  -0.9531,  ...,   0.1406,   1.2812,  -6.0312],
-        [  2.0781,   3.1562,  -4.7188,  ...,  -2.1406,   5.1875,   9.6875]],
-       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), w_autograd=tensor([[ 0.5039,  0.8672, -0.7383,  ...,  0.1914,  0.3535,  0.4785],
-        [ 1.2500,  0.5820,  0.3125,  ...,  2.4219,  1.5469,  0.7383],
-        [-1.0391, -0.0703, -1.9062,  ...,  1.3438, -0.9492,  2.3750],
+        [-15.3750,  12.4375,  -6.9375,  ...,   2.5938,  16.8750,  -1.0078],
+        [ -0.1562,  -2.3750,  -1.6641,  ..., -16.2500,  15.5000,  -9.7500],
+        [ -6.3750,   1.6562,  21.8750,  ...,   2.5156,   6.8125,  -9.3750]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), w_autograd=tensor([[ 0.0054, -2.2500,  0.8359,  ...,  0.8711, -0.7500, -0.1074],
+        [ 0.1436, -1.2656, -0.0947,  ..., -1.2656,  1.0625,  1.7109],
+        [ 0.6484, -0.6016,  0.4160,  ...,  0.0630,  1.0938, -0.7109],
         ...,
-        [-0.4238,  0.5352,  0.2734,  ...,  0.5547,  0.7305, -0.8242],
-        [-1.1719,  0.2910, -0.1377,  ..., -1.7578,  2.0781,  0.9570],
-        [ 0.7461,  0.4824,  1.0156,  ...,  0.7500, -0.5117,  1.1172]],
+        [-0.6250,  1.8672, -0.7070,  ...,  0.7344,  0.0679, -1.1094],
+        [ 0.7461, -0.0092, -0.9453,  ...,  0.2891,  0.5625, -0.9336],
+        [-0.5234, -0.9844,  0.7070,  ..., -0.0164, -2.2344,  0.3223]],
        device='cuda:0', dtype=torch.bfloat16, requires_grad=True)
-2025-03-10 08:31:46,092 - INFO - grad X compare: grad_x=tensor([[  6.4062,   1.3750, -11.0625,  ...,   2.4844, -25.3750,  13.9375],
-        [-28.2500,   1.2656,  -2.9375,  ...,   2.1719,  -5.6875,  10.3750],
-        [-21.3750,   9.2500,   5.5938,  ...,  11.8125,  -8.9375,  -8.2500],
+2025-03-10 08:48:50,686 - INFO - grad X compare: grad_x=tensor([[  7.0938,   8.1875,  -6.4062,  ...,  -5.7188,  15.0625,   7.6562],
+        [-16.6250,  -3.1875,  -2.1719,  ...,   1.8203,  19.1250,  -2.3594],
+        [ -8.1875, -24.2500,  -4.5312,  ..., -15.6250,   3.3125, -12.5625],
         ...,
-        [-25.7500,  -4.4375,   9.1875,  ...,  11.8125,  -6.0000,  25.0000],
-        [ 20.6250,  11.1875,   4.3438,  ...,  -9.9375,  -2.0312,   4.0938],
-        [ 12.6250,  -8.2500,  -5.1562,  ...,   4.4688,  -5.3125,  -5.8125]],
-       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), x_autograd=tensor([[ 1.0000, -0.4414, -0.2910,  ...,  0.7617, -2.0000, -0.4590],
-        [-0.6562,  0.4395,  2.5000,  ..., -2.0000,  0.4941, -0.5195],
-        [ 0.6445, -0.2754,  0.5625,  ..., -1.0938,  0.6016,  0.5820],
+        [ 11.9375,  -7.6875,   0.0894,  ...,   3.0781,  -0.2119,  -6.2812],
+        [  2.8594, -13.3125,  -7.3750,  ...,  -8.0000, -11.1875,  -8.6875],
+        [ 11.1875,  21.1250,   3.5469,  ..., -14.0625,   0.7617,   2.7344]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), x_autograd=tensor([[-4.3750e-01, -1.1094e+00, -8.1250e-01,  ...,  1.6875e+00,
+          4.4141e-01, -7.6953e-01],
+        [ 1.5312e+00, -1.4648e-01, -2.7084e-04,  ...,  1.6309e-01,
+          7.8125e-01, -9.3750e-01],
+        [ 8.0859e-01, -9.6094e-01, -7.0312e-01,  ...,  6.1328e-01,
+          1.3281e+00, -2.4375e+00],
         ...,
-        [ 0.6641, -2.0156,  1.0312,  ..., -0.4902, -2.2031, -0.8867],
-        [ 1.1875, -1.1406,  0.1680,  ..., -0.5312, -0.1060, -0.0864],
-        [ 0.2432, -0.5039, -0.9531,  ..., -2.3750,  0.8281,  0.3594]],
+        [ 1.2109e+00, -1.7773e-01,  8.5547e-01,  ...,  1.4219e+00,
+          2.6562e-01,  1.0156e+00],
+        [-6.5918e-02,  1.8750e-01, -6.7578e-01,  ...,  1.3359e+00,
+          5.7031e-01,  1.4531e+00],
+        [ 1.6328e+00,  1.2266e+00, -1.9922e-01,  ..., -2.9688e-01,
+          1.6953e+00,  1.1328e+00]], device='cuda:0', dtype=torch.bfloat16,
+       requires_grad=True)
+2025-03-10 08:48:50,686 - INFO - Maximum gradient error - grad_x: 0.0, grad_w: 0.0
+2025-03-10 08:48:50,686 - INFO - ✓ Gradients match the PyTorch reference
+2025-03-10 08:48:50,686 - INFO - Test succeeded
+(tritondev) [less@devgpu115.cco2 /data/users/less/applied-ai/dev/triton_groupGEMM/clean (lessw/gg_backward_pass)]$ python fast_debug.py
+TMA benchmarks will be running with experimental grid constant TMA descriptor.
+Running test_backward_pass
+Test setup - G: 2, M: 256, N: 128, K: 64
+Input x shape: torch.Size([256, 64])
+2025-03-10 08:49:04,107 - INFO - Weight w shape: torch.Size([256, 64])
+2025-03-10 08:49:04,109 - INFO - Group sizes: tensor([128, 128], device='cuda:0', dtype=torch.int32)
+2025-03-10 08:49:04,109 - INFO - Running forward pass
+2025-03-10 08:49:04,490 - INFO - Forward result shape: torch.Size([256, 256])
+2025-03-10 08:49:04,490 - INFO - Created gradient with shape: torch.Size([256, 256])
+2025-03-10 08:49:04,490 - INFO - Running backward pass directly
+2025-03-10 08:49:04,490 - INFO - Starting grouped_gemm_backward with fixed configurations
+2025-03-10 08:49:04,490 - INFO - Large computation detected: True
+2025-03-10 08:49:04,490 - INFO - Using high precision computation for large matrices
+2025-03-10 08:49:04,491 - INFO - Using PyTorch fallback for grouped GEMM backward with high precision
+2025-03-10 08:49:04,491 - INFO - PyTorch fallback dims - G: 2, M: 256, N: 128, K_x: 64, K_w: 64
+2025-03-10 08:49:04,574 - INFO - Gradient shapes - grad_x: torch.Size([256, 64]), grad_w: torch.Size([256, 64])
+2025-03-10 08:49:04,574 - INFO - Running PyTorch reference implementation
+2025-03-10 08:49:04,807 - INFO - Comparing gradients with PyTorch reference
+2025-03-10 08:49:04,867 - INFO - grad W compare: grad_w=tensor([[-13.4375, -16.1250,  -0.3320,  ...,   4.8750, -31.7500,  -0.3965],
+        [  1.1953, -22.1250,   7.9062,  ..., -11.2500,  -8.9375,   8.6250],
+        [ 10.4375,  12.5000,  12.8750,  ...,   1.8047,   0.9883,  -8.8750],
+        ...,
+        [ 12.7500,  -6.5000,   0.0444,  ...,   9.8125,  28.3750, -12.5000],
+        [-12.1250,  18.2500,   0.4434,  ...,  -4.7188,  -6.8750,   0.5547],
+        [ -9.5625,  -2.0156, -24.8750,  ...,   9.3750,  -7.6875,  -1.2500]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), w_autograd=tensor([[ 7.5781e-01,  8.1250e-01,  1.2578e+00,  ..., -8.9453e-01,
+         -8.4375e-01,  1.1719e+00],
+        [ 6.4453e-02, -2.6406e+00, -1.5469e+00,  ..., -1.3906e+00,
+          1.2344e+00,  2.4805e-01],
+        [ 3.7695e-01,  1.8125e+00,  1.5747e-02,  ..., -1.3281e+00,
+         -2.9688e-01,  1.8234e-03],
+        ...,
+        [ 4.5508e-01, -8.1641e-01,  1.4688e+00,  ...,  8.3984e-01,
+         -1.0234e+00, -3.1836e-01],
+        [-4.1602e-01,  7.5000e-01, -1.3438e+00,  ..., -2.1777e-01,
+         -9.1309e-02,  7.1875e-01],
+        [ 4.3164e-01, -5.2344e-01, -6.5234e-01,  ...,  5.9375e-01,
+          5.3906e-01,  6.1328e-01]], device='cuda:0', dtype=torch.bfloat16,
+       requires_grad=True)
+2025-03-10 08:49:04,869 - INFO - grad X compare: grad_x=tensor([[ -5.9062,  -2.2344,  17.7500,  ...,  25.2500, -17.0000, -17.2500],
+        [ -4.7188,   4.1875,  -8.8750,  ...,  12.1250,  12.2500, -13.4375],
+        [ -8.3750,   1.8047,  -2.7344,  ...,   8.0625,  -5.4062, -10.3750],
+        ...,
+        [ -3.5000,  -2.2188,   6.1562,  ...,   8.5625,  22.1250,  -3.7969],
+        [ 10.6875,   9.8125,  13.1250,  ...,  -7.0312,   6.2188,  20.7500],
+        [  9.6250, -13.2500,   2.6250,  ...,   7.8438, -10.7500,  -0.2021]],
+       device='cuda:0', dtype=torch.bfloat16, grad_fn=<CopyBackwards>), x_autograd=tensor([[-2.2812, -1.3203,  0.9883,  ...,  2.0781, -0.8789, -1.1094],
+        [ 0.0204, -1.3281,  1.6953,  ..., -0.3828,  1.3281, -0.8203],
+        [-2.5781,  0.9023,  0.4824,  ..., -0.1807, -0.1465, -0.6250],
+        ...,
+        [ 0.3613,  1.0938,  2.0000,  ...,  0.4004, -0.0201, -1.0156],
+        [ 1.5938,  0.6055,  0.0679,  ...,  0.3730,  0.0481, -0.8984],
+        [-0.1245,  0.0693, -0.5234,  ...,  0.9961, -0.0481, -0.7422]],
        device='cuda:0', dtype=torch.bfloat16, requires_grad=True)
-2025-03-10 08:31:46,092 - INFO - Maximum gradient error - grad_x: 1.9073486328125e-06, grad_w: 0.0
-2025-03-10 08:31:46,092 - INFO - ✓ Gradients match the PyTorch reference
-2025-03-10 08:31:46,092 - INFO - Test succeeded
+2025-03-10 08:49:04,869 - INFO - Maximum gradient error - grad_x: 9.5367431640625e-07, grad_w: 7.62939453125e-06
+2025-03-10 08:49:04,869 - INFO - ✓ Gradients match the PyTorch reference
+2025-03-10 08:49:04,869 - INFO - Test succeeded
 """

@@ -22,9 +22,9 @@ def test_backward_pass():
 
         # Test parameters
         G = 2  # Number of groups
-        M = 64  # Input dimension
+        M = 256  # Input dimension
         N = 128  # Output dimension per group
-        K = 32  # Hidden dimension
+        K = 64  # Hidden dimension
 
         # Create input and weight tensors
         x = torch.randn(M, K, dtype=torch.bfloat16, device=device, requires_grad=True)
