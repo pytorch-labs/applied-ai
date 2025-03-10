@@ -36,7 +36,7 @@ def _kernel_grouped_gemm_backward_x(
     # tile sizes - fixed for H100
     BLOCK_SIZE_M: tl.constexpr = 64,  # Tile size for M dimension (input)
     BLOCK_SIZE_K: tl.constexpr = 64,  # Tile size for K dimension (output)
-    BLOCK_SIZE_N: tl.constexpr = 64,  # Increased from 32 to ensure at least 4-byte transfers
+    BLOCK_SIZE_N: tl.constexpr = 64,  # Tile size for N dimension (reduction)
 ) -> None:
     """
     Compute gradients with respect to x (input).
@@ -57,15 +57,8 @@ def _kernel_grouped_gemm_backward_x(
     # Get program ID and calculate SM ID (for work distribution)
     sm_id = tl.program_id(0)
 
-    # Set data type for computation
-    dtype = grad_x_ptr.dtype.element_ty
-
-    # TMA constants
-    TMA_SIZE: tl.constexpr = 128
-    c_desc_ptr = None
-
-    if USE_TMA_STORE:
-        c_desc_ptr = workspace + sm_id * TMA_SIZE
+    # Get the element type for later use
+    output_dtype = grad_x_ptr.dtype.element_ty
 
     # Process groups one by one
     m_start_offset = 0
@@ -84,17 +77,6 @@ def _kernel_grouped_gemm_backward_x(
             num_m_tiles = tl.cdiv(m_size, BLOCK_SIZE_M)
             num_k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
             total_group_tiles = num_m_tiles * num_k_tiles
-
-            # Set up TMA descriptor for output if using TMA
-            if USE_TMA_STORE:
-                tl.extra.cuda.experimental_device_tensormap_create2d(
-                    desc_ptr=c_desc_ptr,
-                    global_address=grad_x_ptr + m_start_offset * K,
-                    load_size=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-                    global_size=[m_size, K],
-                    element_ty=dtype,
-                )
-                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
 
             # Process tiles for this group
             while (
@@ -127,14 +109,9 @@ def _kernel_grouped_gemm_backward_x(
                     offs_n = tl.arange(0, BLOCK_SIZE_N)
                     n_mask = offs_n < n_size
 
-                    # Compute indices for memory access
-                    m_indices = m_start_offset + offs_m[:, None]
-                    n_indices = n_start_offset + n_offset + offs_n[None, :]
-                    k_indices = offs_k[None, :]
-
-                    # Direct memory load instead of using async_copy when needed
-                    # Load grad_output block with explicit memory access pattern
-                    """grad_output_block = tl.load(
+                    # Simple direct loads
+                    # Load grad_output block [M, N]
+                    grad_output_block = tl.load(
                         grad_output_ptr
                         + (m_start_offset + offs_m[:, None]) * (N * G)
                         + (n_start_offset + n_offset + offs_n[None, :]),
@@ -142,60 +119,30 @@ def _kernel_grouped_gemm_backward_x(
                         other=0.0,
                     )
 
-                    grad_output_block = tl.load(
-                        grad_output_ptr
-                        + (m_start_offset + m_offset + offs_m)[:, None] * (N * G)
-                        + (n_start_offset + n_offset + offs_n)[None, :],
-                        mask=m_mask[:, None] & n_mask[None, :],
-                        other=0.0,
-                    )
-                    """
-                    grad_output_block = tl.load(
-                        grad_output_ptr
-                        + (m_start_offset + offs_m)[:, None] * (N * G)
-                        + (n_start_offset + n_offset + offs_n)[None, :],
-                        mask=m_mask[:, None] & n_mask[None, :],
-                        other=0.0,
-                    )
-
-                    # Load weights block with explicit memory access pattern
+                    # Load weights block [N, K]
                     w_block = tl.load(
-                        w_ptr + n_indices[:, None] * K + k_indices,
+                        w_ptr
+                        + (n_start_offset + n_offset + offs_n[:, None]) * K
+                        + offs_k[None, :],
                         mask=n_mask[:, None] & k_mask[None, :],
                         other=0.0,
                     )
 
-                    # Perform matrix multiplication
-                    # grad_x = grad_output @ w
-                    # Convert to float32 for higher precision in compute
-                    grad_output_f32 = grad_output_block.to(tl.float32)
-                    w_f32 = w_block.to(tl.float32)
+                    # Convert to float32 for higher precision
+                    grad_output_f32 = tl.cast(grad_output_block, tl.float32)
+                    w_f32 = tl.cast(w_block, tl.float32)
 
-                    # Accumulate the partial product
-                    accumulator += tl.dot(
-                        grad_output_f32,
-                        w_f32,
-                        allow_tf32=False,  # Disallow tf32 for higher precision
-                    )
+                    # Update accumulator with matrix multiplication
+                    accumulator += tl.dot(grad_output_f32, w_f32, allow_tf32=False)
 
                 # Store the result
-                if USE_TMA_STORE:
-                    # Use TMA for storing result
-                    m_pos = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                    k_pos = (tile_k_idx * BLOCK_SIZE_K).to(tl.int32)
-
-                    tl._experimental_descriptor_store(
-                        c_desc_ptr, accumulator.to(dtype), [m_pos, k_pos]
-                    )
-                else:
-                    # Direct store with boundary check
-                    tl.store(
-                        grad_x_ptr
-                        + (m_start_offset + offs_m[:, None]) * K
-                        + offs_k[None, :],
-                        accumulator.to(dtype),
-                        mask=m_mask[:, None] & k_mask[None, :],
-                    )
+                tl.store(
+                    grad_x_ptr
+                    + (m_start_offset + offs_m[:, None]) * K
+                    + offs_k[None, :],
+                    tl.cast(accumulator, output_dtype),
+                    mask=m_mask[:, None] & k_mask[None, :],
+                )
 
                 # Move to next tile (round-robin across SMs)
                 sm_id += NUM_SMS
@@ -697,7 +644,7 @@ def grouped_gemm_backward(
         NUM_SMS = min(
             device_props.multi_processor_count, 16
         )  # Limit to avoid overloading
-        USE_TMA_LOAD = True  # Disable TMA for loading to avoid async_copy issues
+        USE_TMA_LOAD = False  # Disable TMA for loading to avoid async_copy issues
         USE_TMA_STORE = False  # Disable TMA store for better compatibility
 
         # Use the next power of 2 for M to avoid alignment issues
