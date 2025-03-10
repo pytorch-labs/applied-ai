@@ -356,9 +356,10 @@ def _kernel_grouped_gemm_backward_w(
             iterated_tiles += num_tiles
 
 
+# =================================================================================================
 def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
     """
-    Compute grad_x using pure PyTorch operations.
+    Compute grad_x using pure PyTorch operations with FP32 precision.
 
     Args:
         grad_output: Gradient with respect to output, shape [M, N*G]
@@ -378,6 +379,16 @@ def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
     # First zero out the output to avoid accumulation issues
     grad_x.zero_()
 
+    # Store original dtype for later conversion
+    orig_dtype = grad_x.dtype
+
+    # Convert all inputs to FP32 at the beginning
+    grad_output_fp32 = grad_output.float()
+    w_fp32 = w.float()
+
+    # Temporary buffer to accumulate results in FP32
+    grad_x_fp32 = torch.zeros_like(grad_x, dtype=torch.float32)
+
     m_start = 0
     for g in range(G):
         m_size = m_sizes[g].item()
@@ -387,8 +398,8 @@ def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
             n_end = (g + 1) * N
 
             # Get slices for this group
-            grad_output_slice = grad_output[m_start:m_end, n_start:n_end]
-            w_slice = w[n_start:n_end]
+            grad_output_slice = grad_output_fp32[m_start:m_end, n_start:n_end]
+            w_slice = w_fp32[n_start:n_end]
 
             # Debug info to verify shapes
             logging.debug(
@@ -398,28 +409,21 @@ def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
                 f"grad_output_slice: {grad_output_slice.shape}, w_slice: {w_slice.shape}"
             )
 
-            # Use higher precision for intermediate calculation
-            with torch.cuda.amp.autocast(enabled=False):
-                grad_output_slice = grad_output_slice.float()
-                w_slice = w_slice.float()
+            # Compute gradient in FP32
+            result = torch.matmul(grad_output_slice, w_slice)
 
-                # Correct grad_x computation: grad_x = grad_output @ w
-                # For each row i in the current slice:
-                # grad_x[i] = sum_j (grad_output[i, j] * w[j])
-                result = torch.matmul(grad_output_slice, w_slice)
-
-                # Cast back to original dtype
-                result = result.to(grad_x.dtype)
-
-                # Update grad_x slice
-                grad_x[m_start:m_end].copy_(result)
+            # Update grad_x_fp32 slice
+            grad_x_fp32[m_start:m_end].copy_(result)
 
         m_start = m_end
+
+    # Convert back to original dtype only at the end
+    grad_x.copy_(grad_x_fp32.to(orig_dtype))
 
 
 def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
     """
-    Compute grad_w using pure PyTorch operations.
+    Compute grad_w using pure PyTorch operations with FP32 precision.
 
     Args:
         grad_output: Gradient with respect to output, shape [M, N*G]
@@ -438,6 +442,16 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
     # First zero out the output to avoid accumulation issues
     grad_w.zero_()
 
+    # Store original dtype for later conversion
+    orig_dtype = grad_w.dtype
+
+    # Convert all inputs to FP32 at the beginning
+    grad_output_fp32 = grad_output.float()
+    x_fp32 = x.float()
+
+    # Temporary buffer to accumulate results in FP32
+    grad_w_fp32 = torch.zeros_like(grad_w, dtype=torch.float32)
+
     m_start = 0
     for g in range(G):
         m_size = m_sizes[g].item()
@@ -447,8 +461,8 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
             n_end = (g + 1) * N
 
             # Get slices for this group
-            grad_output_slice = grad_output[m_start:m_end, n_start:n_end]
-            x_slice = x[m_start:m_end]
+            grad_output_slice = grad_output_fp32[m_start:m_end, n_start:n_end]
+            x_slice = x_fp32[m_start:m_end]
 
             # Debug info to verify shapes
             logging.debug(
@@ -458,47 +472,39 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
                 f"grad_output_slice: {grad_output_slice.shape}, x_slice: {x_slice.shape}, K: {K}"
             )
 
-            # Use higher precision for intermediate calculation
-            with torch.cuda.amp.autocast(enabled=False):
-                grad_output_slice = grad_output_slice.float()
-                x_slice = x_slice.float()
+            # Handle the case where K in w might be different from K in x
+            if x_slice.shape[1] == K:
+                # Standard case: x and w have the same K dimension
+                result = torch.matmul(grad_output_slice.t(), x_slice)
+            else:
+                # Handle mismatched dimensions
+                logging.warning(
+                    f"K dimensions don't match: w has K={K}, x has K={x_slice.shape[1]}"
+                )
+                # Create a properly sized result tensor
+                result = torch.zeros(
+                    (grad_output_slice.shape[1], K),
+                    dtype=torch.float32,
+                    device=grad_output_slice.device,
+                )
 
-                # Correct grad_w computation: grad_w = grad_output.T @ x
-                # Handle the case where K in w might be different from K in x
-                if x_slice.shape[1] == K:
-                    # Standard case: x and w have the same K dimension
-                    result = torch.matmul(grad_output_slice.t(), x_slice)
-                else:
-                    # Handle mismatched dimensions
-                    logging.warning(
-                        f"K dimensions don't match: w has K={K}, x has K={x_slice.shape[1]}"
-                    )
-                    # Create a properly sized result tensor
-                    result = torch.zeros(
-                        (grad_output_slice.shape[1], K),
-                        dtype=torch.float32,
-                        device=grad_output_slice.device,
-                    )
+                # Only compute for the overlapping part
+                min_K = min(K, x_slice.shape[1])
+                temp_result = torch.matmul(grad_output_slice.t(), x_slice[:, :min_K])
+                result[:, :min_K] = temp_result
 
-                    # Only compute for the overlapping part
-                    min_K = min(K, x_slice.shape[1])
-                    temp_result = torch.matmul(
-                        grad_output_slice.t(), x_slice[:, :min_K]
-                    )
-                    result[:, :min_K] = temp_result
-
-                # Cast back to original dtype
-                result = result.to(grad_w.dtype)
-
-                # Update grad_w slice
-                grad_w[n_start:n_end].copy_(result)
+            # Update grad_w_fp32 slice
+            grad_w_fp32[n_start:n_end].copy_(result)
 
         m_start = m_end
+
+    # Convert back to original dtype only at the end
+    grad_w.copy_(grad_w_fp32.to(orig_dtype))
 
 
 def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
     """
-    Pure PyTorch implementation of grouped GEMM backward.
+    Pure PyTorch implementation of grouped GEMM backward with FP32 precision.
 
     Args:
         grad_output: Gradient with respect to output, shape [M, N*G]
@@ -513,7 +519,7 @@ def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
 
     import torch
 
-    logging.info("Using PyTorch fallback for grouped GEMM backward")
+    logging.info("Using PyTorch fallback for grouped GEMM backward with FP32 precision")
 
     # Debug info about dimensions
     G = m_sizes.shape[0]
