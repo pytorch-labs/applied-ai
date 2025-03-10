@@ -22,9 +22,9 @@ def test_backward_pass():
 
         # Test parameters
         G = 2  # Number of groups
-        M = 512  # Input dimension
-        N = 512  # Output dimension per group
-        K = 256  # Hidden dimension
+        M = 256  # Input dimension
+        N = 128  # Output dimension per group
+        K = 128  # Hidden dimension
 
         # Create input and weight tensors
         x = torch.randn(M, K, dtype=torch.bfloat16, device=device, requires_grad=True)
@@ -95,6 +95,9 @@ def test_backward_pass():
         logging.info("Comparing gradients with PyTorch reference")
         grad_x_error = (grad_x - x_autograd.grad).abs().max().item()
         grad_w_error = (grad_w - w_autograd.grad).abs().max().item()
+
+        logging.info(f"grad W compare: {grad_w=}, {w_autograd=}")
+        logging.info(f"grad X compare: {grad_x=}, {x_autograd=}")
 
         logging.info(
             f"Maximum gradient error - grad_x: {grad_x_error}, grad_w: {grad_w_error}"

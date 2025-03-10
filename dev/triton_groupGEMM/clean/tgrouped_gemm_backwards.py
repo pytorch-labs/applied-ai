@@ -531,10 +531,23 @@ def grouped_gemm_backward(
 def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
     """
     Compute grad_x using pure PyTorch operations.
+
+    Args:
+        grad_output: Gradient with respect to output, shape [M, N*G]
+        w: Weight tensor from forward pass, shape [N*G, K]
+        m_sizes: Group sizes tensor, shape [G]
+        grad_x: Output tensor to store results, shape [M, K]
     """
+    import logging
+
+    import torch
+
     G = m_sizes.shape[0]
-    M, _ = grad_x.shape
+    M, K = grad_x.shape
     N = w.shape[0] // G
+
+    # First zero out the output to avoid accumulation issues
+    grad_x.zero_()
 
     m_start = 0
     for g in range(G):
@@ -544,10 +557,33 @@ def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
             n_start = g * N
             n_end = (g + 1) * N
 
-            # Correct grad_x computation: grad_x = grad_output @ w
-            grad_x[m_start:m_end] = (
-                grad_output[m_start:m_end, n_start:n_end] @ w[n_start:n_end]
+            # Get slices for this group
+            grad_output_slice = grad_output[m_start:m_end, n_start:n_end]
+            w_slice = w[n_start:n_end]
+
+            # Debug info to verify shapes
+            logging.debug(
+                f"Group {g}: m_start={m_start}, m_end={m_end}, n_start={n_start}, n_end={n_end}"
             )
+            logging.debug(
+                f"grad_output_slice: {grad_output_slice.shape}, w_slice: {w_slice.shape}"
+            )
+
+            # Use higher precision for intermediate calculation
+            with torch.cuda.amp.autocast(enabled=False):
+                grad_output_slice = grad_output_slice.float()
+                w_slice = w_slice.float()
+
+                # Correct grad_x computation: grad_x = grad_output @ w
+                # For each row i in the current slice:
+                # grad_x[i] = sum_j (grad_output[i, j] * w[j])
+                result = torch.matmul(grad_output_slice, w_slice)
+
+                # Cast back to original dtype
+                result = result.to(grad_x.dtype)
+
+                # Update grad_x slice
+                grad_x[m_start:m_end].copy_(result)
 
         m_start = m_end
 
@@ -555,9 +591,22 @@ def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
 def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
     """
     Compute grad_w using pure PyTorch operations.
+
+    Args:
+        grad_output: Gradient with respect to output, shape [M, N*G]
+        x: Input tensor from forward pass, shape [M, K]
+        m_sizes: Group sizes tensor, shape [G]
+        grad_w: Output tensor to store results, shape [N*G, K]
     """
+    import logging
+
+    import torch
+
     G = m_sizes.shape[0]
     N = grad_w.shape[0] // G
+
+    # First zero out the output to avoid accumulation issues
+    grad_w.zero_()
 
     m_start = 0
     for g in range(G):
@@ -567,10 +616,31 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
             n_start = g * N
             n_end = (g + 1) * N
 
-            # Correct grad_w computation: grad_w = grad_output.T @ x
-            grad_w[n_start:n_end] = (
-                grad_output[m_start:m_end, n_start:n_end].T @ x[m_start:m_end]
+            # Get slices for this group
+            grad_output_slice = grad_output[m_start:m_end, n_start:n_end]
+            x_slice = x[m_start:m_end]
+
+            # Debug info to verify shapes
+            logging.debug(
+                f"Group {g}: m_start={m_start}, m_end={m_end}, n_start={n_start}, n_end={n_end}"
             )
+            logging.debug(
+                f"grad_output_slice: {grad_output_slice.shape}, x_slice: {x_slice.shape}"
+            )
+
+            # Use higher precision for intermediate calculation
+            with torch.cuda.amp.autocast(enabled=False):
+                grad_output_slice = grad_output_slice.float()
+                x_slice = x_slice.float()
+
+                # Correct grad_w computation: grad_w = grad_output.T @ x
+                result = torch.matmul(grad_output_slice.t(), x_slice)
+
+                # Cast back to original dtype
+                result = result.to(grad_w.dtype)
+
+                # Update grad_w slice
+                grad_w[n_start:n_end].copy_(result)
 
         m_start = m_end
 
@@ -578,14 +648,21 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
 def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
     """
     Pure PyTorch implementation of grouped GEMM backward.
+
+    Args:
+        grad_output: Gradient with respect to output, shape [M, N*G]
+        x: Input tensor from forward pass, shape [M, K]
+        w: Weight tensor from forward pass, shape [N*G, K]
+        m_sizes: Group sizes tensor, shape [G]
+
+    Returns:
+        Tuple of gradients with respect to x and w: (grad_x, grad_w)
     """
     import logging
 
-    logging.info("Using PyTorch fallback for grouped GEMM backward")
+    import torch
 
-    G = m_sizes.shape[0]
-    M, K = x.shape
-    N = w.shape[0] // G
+    logging.info("Using PyTorch fallback for grouped GEMM backward")
 
     # Allocate output tensors
     grad_x = torch.zeros_like(x)
