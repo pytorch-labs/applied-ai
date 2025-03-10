@@ -371,9 +371,15 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
             m_end = m_start + m_size
             n_start = g * N
             n_end = (g + 1) * N
+
+            # FIXED: Correct matrix multiplication for grad_w
+            # grad_w shape [N*G, K], with current slice [N, K]
+            # x shape [M, K], with current slice [m_size, K]
+            # grad_output shape [M, N*G], with current slice [m_size, N]
             grad_w[n_start:n_end] = (
-                x[m_start:m_end].T @ grad_output[m_start:m_end, n_start:n_end]
+                grad_output[m_start:m_end, n_start:n_end].T @ x[m_start:m_end]
             )
+
         m_start = m_end
 
 
@@ -381,6 +387,8 @@ def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
     """
     Pure PyTorch implementation of grouped GEMM backward.
     """
+    import logging
+
     logging.info("Using PyTorch fallback for grouped GEMM backward")
 
     G = m_sizes.shape[0]
@@ -400,14 +408,14 @@ def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
             n_start = g * N
             n_end = (g + 1) * N
 
-            # grad_x[i] = grad_output[i] @ w
+            # grad_x[i] = grad_output[i] @ w - no change needed
             grad_x[m_start:m_end] = (
                 grad_output[m_start:m_end, n_start:n_end] @ w[n_start:n_end]
             )
 
-            # grad_w[j] = x.T @ grad_output[j]
+            # FIXED: Correct matrix multiplication for grad_w
             grad_w[n_start:n_end] = (
-                x[m_start:m_end].T @ grad_output[m_start:m_end, n_start:n_end]
+                grad_output[m_start:m_end, n_start:n_end].T @ x[m_start:m_end]
             )
 
         m_start = m_end
