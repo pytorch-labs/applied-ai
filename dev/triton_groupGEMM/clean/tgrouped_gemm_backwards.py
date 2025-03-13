@@ -12,12 +12,15 @@ import triton
 import triton.language as tl
 from tma_utils import TmaAutoTuneHelper
 
-#
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+"""
+Backward pass for grouped GEMM with Triton, where grouping is N*G
+We are computing gradients with respect to both the input (`grad_x`) and the weights (`grad_w`).
+"""
 
 
 # =============== Start Triton Kernels ===============
@@ -32,13 +35,13 @@ def _kernel_grouped_gemm_backward_x_scheduled(
     M,  # Total M dimension size
     N,  # N per group
     K,  # K dimension size
-    stride_go_m,  # Stride for grad_output in M dimension
-    stride_go_n,  # Stride for grad_output in N dimension
-    stride_w_n,  # Stride for weights in N dimension
-    stride_w_k,  # Stride for weights in K dimension
-    stride_gx_m,  # Stride for grad_x in M dimension
-    stride_gx_k,  # Stride for grad_x in K dimension
-    NUM_SMS,  # Number of SMs on the GPU
+    stride_go_m,
+    stride_go_n,
+    stride_w_n,
+    stride_w_k,
+    stride_gx_m,
+    stride_gx_k,
+    NUM_SMS,
     USE_TMA_LOAD: tl.constexpr = False,
     USE_TMA_STORE: tl.constexpr = False,
     BLOCK_SIZE_M: tl.constexpr = 64,
@@ -62,133 +65,21 @@ def _kernel_grouped_gemm_backward_x_scheduled(
     dtype = grad_x_ptr.dtype.element_ty
     TMA_SIZE: tl.constexpr = 128
 
-    # Initialize workspace pointer if using TMA store (#TODO - TMA is not tested yet)
+    # Initialize workspace pointer if using TMA store
     if USE_TMA_STORE:
         c_desc_ptr = workspace + tidx * TMA_SIZE
     else:
         c_desc_ptr = None
 
-    # Calculate work distribution
-    pid = tidx
+    # Calculate work distribution parameters
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
     num_pid_in_group = num_pid_m * num_pid_k
-    group_id = pid // num_pid_in_group
-    pid_in_group = pid % num_pid_in_group
-    pid_m = pid_in_group % num_pid_m
-    pid_k = pid_in_group // num_pid_m
 
-    # Get group boundaries
-    valid_group = group_id < G
-    group_start = tl.where(valid_group, tl.load(group_offsets_ptr + group_id), 0)
-    group_end = tl.where(valid_group, tl.load(group_offsets_ptr + group_id + 1), 0)
-    group_size = group_end - group_start
-
-    # Calculate a mask for valid processing (valid group and non-empty)
-    valid_work = valid_group & (group_size > 0)
-
-    # Only process if we have valid work
-    if valid_work:
-        # Compute offsets for this group
-        n_start = group_id * N
-
-        # Block dimensions
-        m_block_offset = pid_m * BLOCK_SIZE_M
-        k_block_offset = pid_k * BLOCK_SIZE_K
-
-        # Setup TMA descriptor for output if using TMA
-        if USE_TMA_STORE:
-            m_size = tl.minimum(
-                BLOCK_SIZE_M, group_end - (group_start + m_block_offset)
-            )
-            if m_size > 0:
-                tl.extra.cuda.experimental_device_tensormap_create2d(
-                    desc_ptr=c_desc_ptr,
-                    global_address=grad_x_ptr
-                    + (group_start + m_block_offset) * stride_gx_m
-                    + k_block_offset * stride_gx_k,
-                    load_size=[m_size, tl.minimum(BLOCK_SIZE_K, K - k_block_offset)],
-                    global_size=[m_size, K],
-                    element_ty=dtype,
-                )
-                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
-
-        # Initialize offsets for this block
-        offs_m = group_start + m_block_offset + tl.arange(0, BLOCK_SIZE_M)
-
-        # For K dimension, optimize memory access if EVEN_K is True
-        offs_k = k_block_offset + tl.arange(0, BLOCK_SIZE_K)
-
-        # Create masks
-        m_mask = offs_m < group_end
-        k_mask = offs_k < K
-
-        # Initialize accumulator
-        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=tl.float32)
-
-        # Loop over the reduction dimension (N)
-        # Use smaller steps to improve precision and avoid numerical issues
-        for n_offset in range(0, N, BLOCK_SIZE_N):
-            # Handle boundary conditions for the reduction dimension
-            n_size = tl.minimum(BLOCK_SIZE_N, N - n_offset)
-            offs_n = n_start + n_offset + tl.arange(0, BLOCK_SIZE_N)
-            n_mask = offs_n < (n_start + N)
-
-            # Fixed stride formats to ensure consistent memory access
-            grad_y_block = tl.load(
-                grad_y_ptr
-                + offs_m[:, None] * stride_go_m
-                + offs_n[None, :] * stride_go_n,
-                mask=m_mask[:, None] & n_mask[None, :],
-                other=0.0,
-            )
-
-            # Load w_t [K, N*G] block with correct strides
-            w_t_block = tl.load(
-                w_t_ptr + offs_k[:, None] * stride_w_k + offs_n[None, :] * stride_w_n,
-                mask=k_mask[:, None] & n_mask[None, :],
-                other=0.0,
-            )
-
-            # grad_y @ w_t.T
-            # Allow TF32 for higher performance if K is even and divisible by 8
-            if EVEN_K:
-                accumulator += tl.dot(
-                    grad_y_block.to(tl.float32),
-                    w_t_block.to(tl.float32).T,
-                    allow_tf32=True,
-                )
-            else:
-                accumulator += tl.dot(
-                    grad_y_block.to(tl.float32),
-                    w_t_block.to(tl.float32).T,
-                    allow_tf32=False,
-                )
-
-        # Store result to grad_x with explicit strides
-        if USE_TMA_STORE:
-            # TMA store
-            tl._experimental_descriptor_store(
-                c_desc_ptr,
-                accumulator.to(dtype),
-                [0, 0],  # Starting offset in the output block
-            )
-        else:
-            # Standard store
-            tl.store(
-                grad_x_ptr
-                + offs_m[:, None] * stride_gx_m
-                + offs_k[None, :] * stride_gx_k,
-                accumulator.to(dtype),
-                mask=m_mask[:, None] & k_mask[None, :],
-            )
-
-    # Process the next batch of work
-    pid = pid + NUM_SMS
-
-    # Keep processing until all work is done
+    # Process all assigned work items
+    pid = tidx
     while pid < G * num_pid_in_group:
-        # Recalculate work distribution
+        # Calculate work distribution for this pid
         group_id = pid // num_pid_in_group
         pid_in_group = pid % num_pid_in_group
         pid_m = pid_in_group % num_pid_m
@@ -246,6 +137,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=tl.float32)
 
             # Loop over the reduction dimension (N)
+            # Use smaller steps to improve precision and avoid numerical issues
             for n_offset in range(0, N, BLOCK_SIZE_N):
                 # Handle boundary conditions for the reduction dimension
                 n_size = tl.minimum(BLOCK_SIZE_N, N - n_offset)
@@ -271,7 +163,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                 )
 
                 # grad_y @ w_t.T
-                # Allow TF32 for higher performance if K is even and divisible by 8
+                # Allow TF32 if K is even and divisible by 8
                 if EVEN_K:
                     accumulator += tl.dot(
                         grad_y_block.to(tl.float32),
@@ -294,7 +186,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                     [0, 0],  # Starting offset in the output block
                 )
             else:
-                # Standard store with explicit strides
+                # Standard store
                 tl.store(
                     grad_x_ptr
                     + offs_m[:, None] * stride_gx_m
@@ -303,7 +195,6 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                     mask=m_mask[:, None] & k_mask[None, :],
                 )
 
-        # Move to the next batch of work
         pid = pid + NUM_SMS
 
 
@@ -318,13 +209,13 @@ def _kernel_grouped_gemm_backward_w_scheduled(
     M,  # Total M dimension size
     N,  # N per group
     K,  # K dimension size
-    stride_x_m,  # Stride for x in M dimension
-    stride_x_k,  # Stride for x in K dimension
-    stride_go_m,  # Stride for grad_output in M dimension
-    stride_go_n,  # Stride for grad_output in N dimension
-    stride_gw_n,  # Stride for grad_w in N dimension
-    stride_gw_k,  # Stride for grad_w in K dimension
-    NUM_SMS,  # Number of SMs on the GPU
+    stride_x_m,
+    stride_x_k,
+    stride_go_m,
+    stride_go_n,
+    stride_gw_n,
+    stride_gw_k,
+    NUM_SMS,
     USE_TMA_LOAD: tl.constexpr = False,
     USE_TMA_STORE: tl.constexpr = False,
     BLOCK_SIZE_N: tl.constexpr = 64,
@@ -355,125 +246,15 @@ def _kernel_grouped_gemm_backward_w_scheduled(
     else:
         c_desc_ptr = None
 
-    # Calculate work distribution
-    pid = tidx
+    # Calculate work distribution parameters
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
     num_pid_in_group = num_pid_n * num_pid_k
-    group_id = pid // num_pid_in_group
-    pid_in_group = pid % num_pid_in_group
-    pid_n = pid_in_group % num_pid_n
-    pid_k = pid_in_group // num_pid_n
 
-    # Get group boundaries
-    valid_group = group_id < G
-    group_start = tl.where(valid_group, tl.load(group_offsets_ptr + group_id), 0)
-    group_end = tl.where(valid_group, tl.load(group_offsets_ptr + group_id + 1), 0)
-    group_size = group_end - group_start
-
-    # Calculate a mask for valid processing (valid group and non-empty)
-    valid_work = valid_group & (group_size > 0)
-
-    # Only process if we have valid work
-    if valid_work:
-        # Compute offsets for this group
-        n_start = group_id * N
-
-        # Block dimensions
-        n_block_offset = pid_n * BLOCK_SIZE_N
-        k_block_offset = pid_k * BLOCK_SIZE_K
-
-        # Setup TMA descriptor for output if using TMA
-        if USE_TMA_STORE:
-            n_size = tl.minimum(BLOCK_SIZE_N, N - n_block_offset)
-            if n_size > 0:
-                tl.extra.cuda.experimental_device_tensormap_create2d(
-                    desc_ptr=c_desc_ptr,
-                    global_address=grad_w_ptr
-                    + (n_start + n_block_offset) * stride_gw_n
-                    + k_block_offset * stride_gw_k,
-                    load_size=[n_size, tl.minimum(BLOCK_SIZE_K, K - k_block_offset)],
-                    global_size=[n_size, K],
-                    element_ty=dtype,
-                )
-                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
-
-        # Initialize offsets for this block
-        offs_n = n_start + n_block_offset + tl.arange(0, BLOCK_SIZE_N)
-        offs_k = k_block_offset + tl.arange(0, BLOCK_SIZE_K)
-
-        # Create masks
-        n_mask = offs_n < (n_start + N)
-        k_mask = offs_k < K
-
-        # Initialize accumulator
-        accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_K), dtype=tl.float32)
-
-        # Loop over the reduction dimension (M) with smaller steps to avoid overflow
-        for m_offset in range(0, group_size, BLOCK_SIZE_M):
-            # Handle boundary conditions for the reduction dimension
-            m_size = tl.minimum(BLOCK_SIZE_M, group_size - m_offset)
-            offs_m = group_start + m_offset + tl.arange(0, BLOCK_SIZE_M)
-            m_mask = offs_m < group_end
-
-            # Load grad_y [M, N*G] block with explicit strides
-            grad_y_block = tl.load(
-                grad_y_ptr
-                + offs_m[:, None] * stride_go_m
-                + offs_n[None, :] * stride_go_n,
-                mask=m_mask[:, None] & n_mask[None, :],
-                other=0.0,
-            )
-
-            # Load x_t [K, M] block with explicit strides
-            x_t_block = tl.load(
-                x_t_ptr + offs_k[:, None] * stride_x_k + offs_m[None, :] * stride_x_m,
-                mask=k_mask[:, None] & m_mask[None, :],
-                other=0.0,
-            )
-
-            # Matrix multiplication: (grad_y_block.T @ x_t_block.T)
-            if EVEN_K:
-                accumulator += tl.dot(
-                    grad_y_block.to(
-                        tl.float32
-                    ).T,  # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                    x_t_block.to(tl.float32).T,  # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                    allow_tf32=True,
-                )
-            else:
-                accumulator += tl.dot(
-                    grad_y_block.to(
-                        tl.float32
-                    ).T,  # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_M]
-                    x_t_block.to(tl.float32).T,  # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
-                    allow_tf32=False,
-                )
-
-        # Store result to grad_w with explicit strides
-        if USE_TMA_STORE:
-            # TMA store
-            tl._experimental_descriptor_store(
-                c_desc_ptr,
-                accumulator.to(dtype),
-                [0, 0],  # Starting offset in the output block
-            )
-        else:
-            # Standard store with explicit strides
-            tl.store(
-                grad_w_ptr
-                + offs_n[:, None] * stride_gw_n
-                + offs_k[None, :] * stride_gw_k,
-                accumulator.to(dtype),
-                mask=n_mask[:, None] & k_mask[None, :],
-            )
-
-    # Process the next batch of work
-    pid = pid + NUM_SMS
-
-    # Keep processing until all work is done
+    # Process all assigned work items
+    pid = tidx
     while pid < G * num_pid_in_group:
-        # Recalculate work distribution
+        # Calculate work distribution for this pid
         group_id = pid // num_pid_in_group
         pid_in_group = pid % num_pid_in_group
         pid_n = pid_in_group % num_pid_n
@@ -526,7 +307,7 @@ def _kernel_grouped_gemm_backward_w_scheduled(
             # Initialize accumulator
             accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_K), dtype=tl.float32)
 
-            # Loop over the reduction dimension (M)
+            # Loop over the reduction dimension (M) with smaller steps to avoid overflow
             for m_offset in range(0, group_size, BLOCK_SIZE_M):
                 # Handle boundary conditions for the reduction dimension
                 m_size = tl.minimum(BLOCK_SIZE_M, group_size - m_offset)
@@ -554,14 +335,22 @@ def _kernel_grouped_gemm_backward_w_scheduled(
                 # Matrix multiplication: (grad_y_block.T @ x_t_block.T)
                 if EVEN_K:
                     accumulator += tl.dot(
-                        grad_y_block.to(tl.float32).T,
-                        x_t_block.to(tl.float32).T,
+                        grad_y_block.to(
+                            tl.float32
+                        ).T,  # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_M]
+                        x_t_block.to(
+                            tl.float32
+                        ).T,  # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
                         allow_tf32=True,
                     )
                 else:
                     accumulator += tl.dot(
-                        grad_y_block.to(tl.float32).T,
-                        x_t_block.to(tl.float32).T,
+                        grad_y_block.to(
+                            tl.float32
+                        ).T,  # Shape: [BLOCK_SIZE_N, BLOCK_SIZE_M]
+                        x_t_block.to(
+                            tl.float32
+                        ).T,  # Shape: [BLOCK_SIZE_M, BLOCK_SIZE_K]
                         allow_tf32=False,
                     )
 
@@ -583,7 +372,6 @@ def _kernel_grouped_gemm_backward_w_scheduled(
                     mask=n_mask[:, None] & k_mask[None, :],
                 )
 
-        # Move to the next batch of work
         pid = pid + NUM_SMS
 
 
@@ -616,7 +404,8 @@ def grouped_gemm_backward(
     # Check CUDA availability
     if not torch.cuda.is_available():
         logging.error("CUDA not available for backward pass")
-        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+        raise RuntimeError("CUDA not available for backward pass")
+        # return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     # Get GPU parameters
     device_props = torch.cuda.get_device_properties("cuda")
@@ -642,7 +431,8 @@ def grouped_gemm_backward(
     # Check that K dimensions match
     if K_x != K_w:
         logging.warning(f"K dimension mismatch: x has K={K_x}, w has K={K_w}")
-        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+        raise ValueError("K dimensions must match for grouped GEMM backward")
+        # return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
 
     try:
         # Ensure contiguous tensors
@@ -741,7 +531,7 @@ def grouped_gemm_backward(
         try:
             logging.info("Computing grad_x with TMA-enabled kernel")
 
-            # Fixed grid size based on SM count - similar to original approach
+            # Fixed grid size based on SM count
             grid = (NUM_SMS,)
 
             _kernel_grouped_gemm_backward_x_scheduled[grid](
