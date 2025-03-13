@@ -7,6 +7,14 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+# import the reference implementations
+from pytorch_reference_backwards import (
+    _compute_grad_w_pytorch,
+    _compute_grad_x_pytorch,
+    _pytorch_fallback_backward,
+    _pytorch_reference_backward,
+)
+
 # Import the grouped GEMM modules
 from tgrouped_gemm_backwards import grouped_gemm_backward
 from tgrouped_gemm_forward import grouped_gemm_forward as grouped_gemm
@@ -15,13 +23,12 @@ from tgrouped_gemm_forward import grouped_gemm_forward as grouped_gemm
 def test_backward_pass():
     """
     A simple test for the grouped GEMM backward pass with detailed error handling.
-    Tests with small dimensions to focus on functionality.
     """
     try:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Test parameters
-        G = 4  # Number of groups
+        G = 20  # Number of groups
         M = 1024  # Input dimension
         N = 512  # Output dimension per group
         K = 256  # Hidden dimension
@@ -131,7 +138,7 @@ def test_backward_pass():
         else:
             logging.error("✗ FAILURE: Gradient mismatch detected in allclose check")
 
-        # Additional diagnostics for failed cases
+        # Additional diagnostics (for failed cases or in general)
         if True:  # not grad_x_close:
             # Find where the largest differences are
             diff_x = (grad_x - x_autograd.grad).abs()

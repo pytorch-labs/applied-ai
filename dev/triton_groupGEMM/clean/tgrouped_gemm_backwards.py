@@ -12,12 +12,15 @@ import triton
 import triton.language as tl
 from tma_utils import TmaAutoTuneHelper
 
+#
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
+# =============== Start Triton Kernels ===============
 @triton.jit
 def _kernel_grouped_gemm_backward_x_scheduled(
     grad_y_ptr,  # grad of dl/dY [M, N*G]
@@ -59,7 +62,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
     dtype = grad_x_ptr.dtype.element_ty
     TMA_SIZE: tl.constexpr = 128
 
-    # Initialize workspace pointer if using TMA store
+    # Initialize workspace pointer if using TMA store (#TODO - TMA is not tested yet)
     if USE_TMA_STORE:
         c_desc_ptr = workspace + tidx * TMA_SIZE
     else:
@@ -171,7 +174,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                 [0, 0],  # Starting offset in the output block
             )
         else:
-            # Standard store with explicit strides
+            # Standard store
             tl.store(
                 grad_x_ptr
                 + offs_m[:, None] * stride_gx_m
@@ -586,193 +589,7 @@ def _kernel_grouped_gemm_backward_w_scheduled(
 
 # ========== End Triton kernels ==========
 
-
-def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
-    """
-    Compute grad_x using pure PyTorch operations with FP32 precision for better accuracy.
-    """
-    G = m_sizes.shape[0]
-    M, K = grad_x.shape
-    N = w.shape[0] // G
-
-    # Zero out the output tensor first
-    grad_x.zero_()
-
-    # Store original dtype and convert to float32 for computation
-    orig_dtype = grad_x.dtype
-    grad_output_fp32 = grad_output.float()
-    w_fp32 = w.float()
-    grad_x_fp32 = torch.zeros_like(grad_x, dtype=torch.float32)
-
-    # Process each group separately
-    m_start = 0
-    for g in range(G):
-        m_size = m_sizes[g].item()
-        if m_size > 0:
-            m_end = m_start + m_size
-            n_start = g * N
-            n_end = (g + 1) * N
-
-            # Get slices for this group
-            grad_output_slice = grad_output_fp32[m_start:m_end, n_start:n_end]
-            w_slice = w_fp32[n_start:n_end]
-
-            # Process in chunks for better precision on large matrices
-            CHUNK_SIZE = 256
-            for chunk_start in range(0, m_size, CHUNK_SIZE):
-                chunk_end = min(chunk_start + CHUNK_SIZE, m_size)
-                chunk_size = chunk_end - chunk_start
-
-                # Compute matrix multiplication with higher precision
-                grad_output_chunk = grad_output_slice[chunk_start:chunk_end]
-                result_chunk = torch.matmul(
-                    grad_output_chunk.double(), w_slice.double()
-                )
-
-                # Store the result
-                grad_x_fp32[m_start + chunk_start : m_start + chunk_end].copy_(
-                    result_chunk.float()
-                )
-
-        m_start = m_end
-
-    # Convert back to original dtype
-    grad_x.copy_(grad_x_fp32.to(orig_dtype))
-
-
-def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
-    """
-    Compute grad_w using pure PyTorch operations with FP64 precision for better accuracy.
-    """
-    G = m_sizes.shape[0]
-    N_times_G, K = grad_w.shape
-    N = N_times_G // G
-
-    # Zero out the output tensor first
-    grad_w.zero_()
-
-    # Store original dtype and convert to float32 for computation
-    orig_dtype = grad_w.dtype
-    grad_output_fp32 = grad_output.float()
-    x_fp32 = x.float()
-    grad_w_fp32 = torch.zeros_like(grad_w, dtype=torch.float32)
-
-    # Handle potential K dimension mismatches
-    K_x = x.shape[1]
-    min_K = min(K, K_x)
-
-    # Process each group separately
-    m_start = 0
-    for g in range(G):
-        m_size = m_sizes[g].item()
-        if m_size > 0:
-            m_end = m_start + m_size
-            n_start = g * N
-            n_end = (g + 1) * N
-
-            # Get slices for this group
-            grad_output_slice = grad_output_fp32[m_start:m_end, n_start:n_end]
-            x_slice = x_fp32[m_start:m_end, :min_K]
-
-            # Process in chunks for better precision
-            CHUNK_SIZE = 32
-            result = torch.zeros(
-                (grad_output_slice.shape[1], min_K),
-                dtype=torch.float64,
-                device=grad_output_slice.device,
-            )
-
-            for chunk_start in range(0, m_size, CHUNK_SIZE):
-                chunk_end = min(chunk_start + CHUNK_SIZE, m_size)
-
-                # Get chunks
-                grad_output_chunk = grad_output_slice[chunk_start:chunk_end].double()
-                x_chunk = x_slice[chunk_start:chunk_end].double()
-
-                # Matrix multiplication in FP64
-                chunk_result = torch.matmul(grad_output_chunk.t(), x_chunk)
-                result += chunk_result
-
-            # Handle K dimension padding if needed
-            if K > min_K:
-                temp_result = torch.zeros(
-                    (grad_output_slice.shape[1], K),
-                    dtype=torch.float32,
-                    device=grad_output_slice.device,
-                )
-                temp_result[:, :min_K] = result.float()
-                grad_w_fp32[n_start:n_end].copy_(temp_result)
-            else:
-                grad_w_fp32[n_start:n_end].copy_(result.float())
-
-        m_start = m_end
-
-    # Convert back to original dtype
-    grad_w.copy_(grad_w_fp32.to(orig_dtype))
-
-
-def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
-    """
-    Pure PyTorch implementation of grouped GEMM backward with high precision.
-    Used as a fallback when the Triton kernels cannot be used.
-    """
-    logging.info(
-        "WARNING:  Using PyTorch fallback for grouped GEMM backward with high precision"
-    )
-
-    # Ensure inputs are contiguous
-    x = x.contiguous()
-    w = w.contiguous()
-    grad_output = grad_output.contiguous()
-    m_sizes = m_sizes.contiguous()
-
-    # Allocate output tensors
-    grad_x = torch.zeros_like(x)
-    grad_w = torch.zeros_like(w)
-
-    # Compute gradients using the helper functions
-    _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
-    _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
-
-    return grad_x, grad_w
-
-
-def _pytorch_reference_backward(grad_output, x, w, m_sizes):
-    """
-    Pure PyTorch implementation of grouped GEMM backward for validation.
-    Simple version that's easy to verify but may be less numerically accurate
-    for large matrices.
-    """
-    # Create output gradients
-    grad_x = torch.zeros_like(x)
-    grad_w = torch.zeros_like(w)
-
-    # Compute group-by-group
-    G = m_sizes.shape[0]
-    N = w.shape[0] // G
-
-    m_start = 0
-    for g in range(G):
-        m_size = m_sizes[g].item()
-        if m_size > 0:
-            m_end = m_start + m_size
-            n_start = g * N
-            n_end = (g + 1) * N
-
-            # Compute gradients
-            grad_x[m_start:m_end] = torch.matmul(
-                grad_output[m_start:m_end, n_start:n_end], w[n_start:n_end]
-            )
-            grad_w[n_start:n_end] = torch.matmul(
-                grad_output[m_start:m_end, n_start:n_end].t(), x[m_start:m_end]
-            )
-
-        m_start += m_size
-
-    return grad_x, grad_w
-
-
-# ========== End helper functions ==========
+# Moved PyTorch fallback implementation to a separate file
 # ========== Begin grouped_gemm_backward ==========
 
 
@@ -810,8 +627,8 @@ def grouped_gemm_backward(
 
     if has_tma:
         logging.info(f"TMA support detected on GPU with {NUM_SMS} SMs")
-        USE_TMA_LOAD = True
-        USE_TMA_STORE = False  # Default to disabled until verified reliability
+        USE_TMA_LOAD = True  # TODO - this does nothing atm..removed to focus on numerical correctness first.
+        USE_TMA_STORE = False
     else:
         logging.warning("TMA support not detected, disabling TMA optimizations")
         USE_TMA_LOAD = False
@@ -839,31 +656,31 @@ def grouped_gemm_backward(
         grad_w = torch.zeros_like(w)
 
         # Determine N per group
-        # Note that N*G is the second dimension size of grad_output
+        # N*G is the second dimension size of grad_output
         N = N_times_G // G
 
-        # Set stride values using tensor strides
+        # Set stride values
         # Direct access pattern for grad_output tensor
-        stride_go_m = grad_output.stride(0)  # Stride for grad_output in M dimension
-        stride_go_n = grad_output.stride(1)  # Stride for grad_output in N dimension
+        stride_go_m = grad_output.stride(0)  # grad_output in M dimension
+        stride_go_n = grad_output.stride(1)  # grad_output in N dimension
 
-        # Pattern matches the transposed weight tensor
-        stride_w_n = 1  # Stride for transposed weights in N dimension
-        stride_w_k = N * G  # Stride for transposed weights in K dimension
+        # Pattern match the transposed weight tensor
+        stride_w_n = 1  # transposed weights in N dimension
+        stride_w_k = N * G  # transposed weights in K dimension
 
-        # Pattern matches the output grad_x tensor
-        stride_gx_m = grad_x.stride(0)  # Stride for grad_x in M dimension
-        stride_gx_k = grad_x.stride(1)  # Stride for grad_x in K dimension
+        # Pattern match the output grad_x tensor
+        stride_gx_m = grad_x.stride(0)  # grad_x in M dimension
+        stride_gx_k = grad_x.stride(1)  # Sgrad_x in K dimension
 
-        # Pattern matches the transposed x tensor
+        # Pattern match the transposed x tensor
         stride_x_m = 1  # Stride for transposed x in M dimension
         stride_x_k = M  # Stride for transposed x in K dimension
 
-        # Pattern matches the output grad_w tensor
-        stride_gw_n = grad_w.stride(0)  # Stride for grad_w in N dimension
-        stride_gw_k = grad_w.stride(1)  # Stride for grad_w in K dimension
+        # Pattern match the output grad_w tensor
+        stride_gw_n = grad_w.stride(0)  # grad_w in N dimension
+        stride_gw_k = grad_w.stride(1)  # grad_w in K dimension
 
-        # Pre-compute group offsets for efficient group indexing
+        # Pre-compute group offsets for indexing
         group_offsets = torch.zeros(G + 1, device=m_sizes.device, dtype=torch.int32)
         m_offset = 0
         for g in range(G):
@@ -871,7 +688,7 @@ def grouped_gemm_backward(
             m_offset += m_sizes[g].item()
         group_offsets[G] = m_offset  # Total M
 
-        # Check if K dimension is even (can optimize memory access patterns)
+        # Check if K dimension is even (maybe? optimize memory access patterns)
         EVEN_K = (K_x % 8) == 0
         logging.info(f"EVEN_K optimization enabled: {EVEN_K} (K={K_x})")
 
@@ -886,7 +703,7 @@ def grouped_gemm_backward(
             # Empty tensor when TMA is not used
             workspace = torch.empty(0, device=x.device, dtype=torch.uint8)
 
-        # Set block sizes based on K dimension
+        # Set block sizes based on K dimension - TODO - autotuning
         if K_x <= 64:
             BLOCK_SIZE_K = 64
             BLOCK_SIZE_M = 64
@@ -995,9 +812,9 @@ def grouped_gemm_backward(
         except Exception as e:
             logging.error(f"FAILED: Error in TMA-enabled backward_w kernel: {e}")
             logging.info("WARNING: Falling back to PyTorch for grad_w")
-            _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
+            # _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
 
         return grad_x, grad_w
     except Exception as e:
         logging.error(f"Error in grouped_gemm_backward: {e}")
-        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+        # return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
