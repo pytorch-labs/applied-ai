@@ -45,7 +45,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
     EVEN_K: tl.constexpr = True,
 ) -> None:
     """
-    Optimized scheduled implementation of grouped GEMM backward for X with TMA support.
+    Scheduled grouped GEMM backward for X with TMA support.
 
     For each group g, computes: grad_x[g] = grad_y[g] @ w_t[g].T
 
@@ -54,7 +54,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
     - w_t is [K, N*G] (transposed from [N*G, K])
     - grad_x is [M, K]
     """
-    # Define grid schedule
+    # Get coordinates for the current program
     tidx = tl.program_id(axis=0)
     dtype = grad_x_ptr.dtype.element_ty
     TMA_SIZE: tl.constexpr = 128
@@ -144,8 +144,9 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                 other=0.0,
             )
 
-            # Matrix multiplication: grad_y @ w_t.T
+            # grad_y @ w_t.T
             # Allow TF32 for higher performance if K is even and divisible by 8
+            # this may not be required for the backward pass
             if EVEN_K:
                 accumulator += tl.dot(
                     grad_y_block.to(tl.float32),
@@ -161,7 +162,6 @@ def _kernel_grouped_gemm_backward_x_scheduled(
 
         # Store result to grad_x
         if USE_TMA_STORE:
-            # Use TMA to store the result
             m_offset = 0
             n_offset = 0
 
@@ -179,9 +179,7 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                 mask=m_mask[:, None] & k_mask[None, :],
             )
 
-        # Move to next tile if needed
-        if USE_TMA_STORE:
-            tidx += NUM_SMS  # Next tile processing with TMA
+        tidx += NUM_SMS
 
 
 @triton.jit
@@ -211,16 +209,17 @@ def _kernel_grouped_gemm_backward_w_scheduled(
     EVEN_K: tl.constexpr = True,
 ) -> None:
     """
-    Optimized scheduled implementation of grouped GEMM backward for W with TMA support.
+    Scheduled implementation of grouped GEMM backward for W with TMA support.
 
-    For each group g, computes: grad_w[g] = grad_y[g].T @ x[g]
+    For each group g, computes:
+        grad_w[g] = grad_y[g].T @ x[g]
 
     Where:
     - x_t is [K, M] (transposed from [M, K])
     - grad_y is [M, N*G]
     - grad_w is [N*G, K]
     """
-    # Define grid schedule
+    # Define coordinates for the current program
     tidx = tl.program_id(axis=0)
     dtype = grad_w_ptr.dtype.element_ty
     TMA_SIZE: tl.constexpr = 128
@@ -308,6 +307,7 @@ def _kernel_grouped_gemm_backward_w_scheduled(
 
             # Matrix multiplication: (grad_y_block.T @ x_t_block.T)
             # Allow TF32 for higher performance if K is even and divisible by 8
+            # this may not be required for the backward pass
             if EVEN_K:
                 accumulator += tl.dot(
                     grad_y_block.to(
@@ -327,7 +327,7 @@ def _kernel_grouped_gemm_backward_w_scheduled(
 
         # Store result to grad_w
         if USE_TMA_STORE:
-            # Use TMA to store the result
+
             n_offset = 0
             k_offset = 0
 
@@ -345,9 +345,7 @@ def _kernel_grouped_gemm_backward_w_scheduled(
                 mask=n_mask[:, None] & k_mask[None, :],
             )
 
-        # Move to next tile if needed
-        if USE_TMA_STORE:
-            tidx += NUM_SMS  # Next tile processing with TMA
+        tidx += NUM_SMS
 
 
 def _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x):
@@ -477,9 +475,11 @@ def _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w):
 def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
     """
     Pure PyTorch implementation of grouped GEMM backward with high precision.
-    Used as a fallback when the CUDA kernels cannot be used.
+    Used as a fallback when the Triton kernels cannot be used.
     """
-    logging.info("Using PyTorch fallback for grouped GEMM backward with high precision")
+    logging.info(
+        "WARNING:  Using PyTorch fallback for grouped GEMM backward with high precision"
+    )
 
     # Ensure inputs are contiguous
     x = x.contiguous()
@@ -501,7 +501,7 @@ def _pytorch_fallback_backward(grad_output, x, w, m_sizes):
 def _pytorch_reference_backward(grad_output, x, w, m_sizes):
     """
     Pure PyTorch implementation of grouped GEMM backward for validation.
-    Simpler version that's easier to verify but may be less numerically stable
+    Simple version that's easy to verify but may be less numerically accurate
     for large matrices.
     """
     # Create output gradients
@@ -568,7 +568,7 @@ def grouped_gemm_backward(
     if has_tma:
         logging.info(f"TMA support detected on GPU with {NUM_SMS} SMs")
         USE_TMA_LOAD = True
-        USE_TMA_STORE = False  # Default to disabled for reliability
+        USE_TMA_STORE = False  # Default to disabled until verified reliability
     else:
         logging.warning("TMA support not detected, disabling TMA optimizations")
         USE_TMA_LOAD = False
@@ -596,21 +596,26 @@ def grouped_gemm_backward(
         grad_w = torch.zeros_like(w)
 
         # Determine N per group
+        # Note that DeepSeek uses M*G instead of N*G
         N = N_times_G // G
 
         # Set strided access patterns
         stride_go_m = N * G  # Stride for grad_output in M dimension
         stride_go_n = 1  # Stride for grad_output in N dimension
+
         stride_w_n = K_x  # Stride for weights in N dimension
         stride_w_k = 1  # Stride for weights in K dimension
+
         stride_gx_m = K_x  # Stride for grad_x in M dimension
         stride_gx_k = 1  # Stride for grad_x in K dimension
+
         stride_x_m = K_x  # Stride for x in M dimension
         stride_x_k = 1  # Stride for x in K dimension
+
         stride_gw_n = K_w  # Stride for grad_w in N dimension
         stride_gw_k = 1  # Stride for grad_w in K dimension
 
-        # Pre-compute group offsets for more efficient group indexing
+        # Pre-compute group offsets for efficient group indexing
         group_offsets = torch.zeros(G + 1, device=m_sizes.device, dtype=torch.int32)
         m_offset = 0
         for g in range(G):
@@ -618,7 +623,7 @@ def grouped_gemm_backward(
             m_offset += m_sizes[g].item()
         group_offsets[G] = m_offset  # Total M
 
-        # Check if K dimension is even (can optimize memory access patterns)
+        # Check if K dimension is even (can optimize memory access patterns?)
         EVEN_K = (K_x % 8) == 0
         logging.info(f"EVEN_K optimization enabled: {EVEN_K} (K={K_x})")
 
@@ -656,10 +661,12 @@ def grouped_gemm_backward(
                 USE_TMA_STORE,
                 EVEN_K=EVEN_K,
             )
-            logging.info("grad_x computation successful with TMA-enabled kernel")
+            logging.info(
+                "SUCCESS!! grad_X computation successful with TMA-enabled kernel"
+            )
         except Exception as e:
-            logging.error(f"Error in TMA-enabled backward_x kernel: {e}")
-            logging.info("Falling back to PyTorch for grad_x")
+            logging.error(f"FAILED: Error in TMA-enabled backward_x kernel: {e}")
+            logging.info("WARNING: Falling back to PyTorch for grad_x")
             _compute_grad_x_pytorch(grad_output, w, m_sizes, grad_x)
 
         try:
@@ -689,10 +696,12 @@ def grouped_gemm_backward(
                 USE_TMA_STORE,
                 EVEN_K=EVEN_K,
             )
-            logging.info("grad_w computation successful with TMA-enabled kernel")
+            logging.info(
+                "SUCCESS!! grad_W computation successful with TMA-enabled kernel"
+            )
         except Exception as e:
-            logging.error(f"Error in TMA-enabled backward_w kernel: {e}")
-            logging.info("Falling back to PyTorch for grad_w")
+            logging.error(f"FAILED:  Error in TMA-enabled backward_w kernel: {e}")
+            logging.info("WARNING: Falling back to PyTorch for grad_w")
             _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
 
         return grad_x, grad_w
