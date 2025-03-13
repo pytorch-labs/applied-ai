@@ -131,16 +131,18 @@ def _kernel_grouped_gemm_backward_x_scheduled(
             offs_n = n_start + n_offset + tl.arange(0, BLOCK_SIZE_N)
             n_mask = offs_n < (n_start + N)
 
-            # Load grad_y [M, N*G] block with explicit strides
+            # Fixed stride formats to ensure consistent memory access
             grad_y_block = tl.load(
-                grad_y_ptr + offs_m[:, None] * stride_go_m + offs_n[None, :],
+                grad_y_ptr
+                + offs_m[:, None] * stride_go_m
+                + offs_n[None, :] * stride_go_n,
                 mask=m_mask[:, None] & n_mask[None, :],
                 other=0.0,
             )
 
-            # Load w_t [K, N*G] block with explicit strides
+            # Load w_t [K, N*G] block with correct strides
             w_t_block = tl.load(
-                w_t_ptr + offs_k[:, None] * stride_w_k + offs_n[None, :],
+                w_t_ptr + offs_k[:, None] * stride_w_k + offs_n[None, :] * stride_w_n,
                 mask=k_mask[:, None] & n_mask[None, :],
                 other=0.0,
             )
@@ -247,16 +249,20 @@ def _kernel_grouped_gemm_backward_x_scheduled(
                 offs_n = n_start + n_offset + tl.arange(0, BLOCK_SIZE_N)
                 n_mask = offs_n < (n_start + N)
 
-                # Load grad_y [M, N*G] block with explicit strides
+                # Fixed stride formats to ensure consistent memory access
                 grad_y_block = tl.load(
-                    grad_y_ptr + offs_m[:, None] * stride_go_m + offs_n[None, :],
+                    grad_y_ptr
+                    + offs_m[:, None] * stride_go_m
+                    + offs_n[None, :] * stride_go_n,
                     mask=m_mask[:, None] & n_mask[None, :],
                     other=0.0,
                 )
 
-                # Load w_t [K, N*G] block with explicit strides
+                # Load w_t [K, N*G] block with correct strides
                 w_t_block = tl.load(
-                    w_t_ptr + offs_k[:, None] * stride_w_k + offs_n[None, :],
+                    w_t_ptr
+                    + offs_k[:, None] * stride_w_k
+                    + offs_n[None, :] * stride_w_n,
                     mask=k_mask[:, None] & n_mask[None, :],
                     other=0.0,
                 )
@@ -409,14 +415,16 @@ def _kernel_grouped_gemm_backward_w_scheduled(
 
             # Load grad_y [M, N*G] block with explicit strides
             grad_y_block = tl.load(
-                grad_y_ptr + offs_m[:, None] * stride_go_m + offs_n[None, :],
+                grad_y_ptr
+                + offs_m[:, None] * stride_go_m
+                + offs_n[None, :] * stride_go_n,
                 mask=m_mask[:, None] & n_mask[None, :],
                 other=0.0,
             )
 
             # Load x_t [K, M] block with explicit strides
             x_t_block = tl.load(
-                x_t_ptr + offs_k[:, None] * stride_x_k + offs_m[None, :],
+                x_t_ptr + offs_k[:, None] * stride_x_k + offs_m[None, :] * stride_x_m,
                 mask=k_mask[:, None] & m_mask[None, :],
                 other=0.0,
             )
@@ -524,14 +532,18 @@ def _kernel_grouped_gemm_backward_w_scheduled(
 
                 # Load grad_y [M, N*G] block with explicit strides
                 grad_y_block = tl.load(
-                    grad_y_ptr + offs_m[:, None] * stride_go_m + offs_n[None, :],
+                    grad_y_ptr
+                    + offs_m[:, None] * stride_go_m
+                    + offs_n[None, :] * stride_go_n,
                     mask=m_mask[:, None] & n_mask[None, :],
                     other=0.0,
                 )
 
                 # Load x_t [K, M] block with explicit strides
                 x_t_block = tl.load(
-                    x_t_ptr + offs_k[:, None] * stride_x_k + offs_m[None, :],
+                    x_t_ptr
+                    + offs_k[:, None] * stride_x_k
+                    + offs_m[None, :] * stride_x_m,
                     mask=k_mask[:, None] & m_mask[None, :],
                     other=0.0,
                 )
@@ -772,6 +784,15 @@ def grouped_gemm_backward(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Backward pass for grouped matrix multiplication using scheduled kernels with TMA support.
+
+    Args:
+        grad_output: Gradient with respect to output, shape [M, N*G]
+        x: Input tensor from forward pass, shape [M, K]
+        w: Weight tensor from forward pass, shape [N*G, K]
+        m_sizes: Group sizes tensor, shape [G]
+
+    Returns:
+        Tuple of gradients with respect to x and w: (grad_x, grad_w)
     """
     logging.info("Starting grouped_gemm_backward with TMA-enabled scheduling")
 
@@ -789,8 +810,8 @@ def grouped_gemm_backward(
 
     if has_tma:
         logging.info(f"TMA support detected on GPU with {NUM_SMS} SMs")
-        USE_TMA_LOAD = False
-        USE_TMA_STORE = False
+        USE_TMA_LOAD = True
+        USE_TMA_STORE = False  # Default to disabled until verified reliability
     else:
         logging.warning("TMA support not detected, disabling TMA optimizations")
         USE_TMA_LOAD = False
@@ -818,19 +839,29 @@ def grouped_gemm_backward(
         grad_w = torch.zeros_like(w)
 
         # Determine N per group
+        # Note that N*G is the second dimension size of grad_output
         N = N_times_G // G
 
         # Set stride values using tensor strides
-        stride_go_m = grad_output.stride(0)
-        stride_go_n = grad_output.stride(1)
-        stride_w_n = K_w
-        stride_w_k = 1
-        stride_gx_m = K_x
-        stride_gx_k = 1
-        stride_x_m = 1
-        stride_x_k = M
-        stride_gw_n = K_w
-        stride_gw_k = 1
+        # Direct access pattern for grad_output tensor
+        stride_go_m = grad_output.stride(0)  # Stride for grad_output in M dimension
+        stride_go_n = grad_output.stride(1)  # Stride for grad_output in N dimension
+
+        # Pattern matches the transposed weight tensor
+        stride_w_n = 1  # Stride for transposed weights in N dimension
+        stride_w_k = N * G  # Stride for transposed weights in K dimension
+
+        # Pattern matches the output grad_x tensor
+        stride_gx_m = grad_x.stride(0)  # Stride for grad_x in M dimension
+        stride_gx_k = grad_x.stride(1)  # Stride for grad_x in K dimension
+
+        # Pattern matches the transposed x tensor
+        stride_x_m = 1  # Stride for transposed x in M dimension
+        stride_x_k = M  # Stride for transposed x in K dimension
+
+        # Pattern matches the output grad_w tensor
+        stride_gw_n = grad_w.stride(0)  # Stride for grad_w in N dimension
+        stride_gw_k = grad_w.stride(1)  # Stride for grad_w in K dimension
 
         # Pre-compute group offsets for efficient group indexing
         group_offsets = torch.zeros(G + 1, device=m_sizes.device, dtype=torch.int32)
@@ -845,34 +876,60 @@ def grouped_gemm_backward(
         logging.info(f"EVEN_K optimization enabled: {EVEN_K} (K={K_x})")
 
         # Transpose x and w for backward computation
-        x_t = x.T.contiguous()
-        w_t = w.T.contiguous()
+        x_t = x.T.contiguous()  # Shape: [K, M]
+        w_t = w.T.contiguous()  # Shape: [K, N*G]
 
-        # Allocate workspace for TMA descriptors
-        workspace = torch.empty((NUM_SMS * 128), device=x.device, dtype=torch.uint8)
+        # Allocate workspace for TMA descriptors if needed
+        if USE_TMA_LOAD or USE_TMA_STORE:
+            workspace = torch.empty((NUM_SMS * 128), device=x.device, dtype=torch.uint8)
+        else:
+            # Empty tensor when TMA is not used
+            workspace = torch.empty(0, device=x.device, dtype=torch.uint8)
 
         # Set block sizes based on K dimension
         if K_x <= 64:
+            BLOCK_SIZE_K = 64
             BLOCK_SIZE_M = 64
+            # BLOCK_SIZE_K_W = 64
             BLOCK_SIZE_N = 64
-            BLOCK_SIZE_K_X = 64
-            BLOCK_SIZE_K_W = 64
         else:
             # For larger K, use smaller blocks to avoid register pressure
+            BLOCK_SIZE_K = 32
             BLOCK_SIZE_M = 32
+            # BLOCK_SIZE_K_W = 32
             BLOCK_SIZE_N = 32
+
+        # Determine maximum size needed and set the grid size
+        num_pid_m = triton.cdiv(M, BLOCK_SIZE_M)
+        num_pid_k = triton.cdiv(K_x, BLOCK_SIZE_K)
+        num_pid_n = triton.cdiv(N, BLOCK_SIZE_N)
+
+        # Compute total number of blocks needed for each kernel
+        total_blocks_x = G * num_pid_m * num_pid_k
+        total_blocks_w = G * num_pid_n * num_pid_k
+
+        # Set block sizes based on K dimension
+        if K_x <= 64:
+            BLOCK_SIZE_K_X = 64
+            BLOCK_SIZE_M = 64
+            BLOCK_SIZE_K_W = 64
+            BLOCK_SIZE_N = 64
+        else:
+            # For larger K, use smaller blocks to avoid register pressure
             BLOCK_SIZE_K_X = 32
+            BLOCK_SIZE_M = 32
             BLOCK_SIZE_K_W = 32
+            BLOCK_SIZE_N = 32
 
         try:
             logging.info("Computing grad_x with TMA-enabled kernel")
 
-            # Fixed grid size based on SM count
+            # Fixed grid size based on SM count - similar to original approach
             grid = (NUM_SMS,)
 
             _kernel_grouped_gemm_backward_x_scheduled[grid](
                 grad_output,
-                w_t,
+                w_t,  # Using transposed weights
                 grad_x,
                 group_offsets,
                 workspace,
@@ -895,7 +952,7 @@ def grouped_gemm_backward(
                 EVEN_K=EVEN_K,
             )
             logging.info(
-                "SUCCESS!! grad_X computation successful with TMA-enabled kernel"
+                "Kernel run success: grad_X computation successful with TMA-enabled kernel"
             )
         except Exception as e:
             logging.error(f"FAILED: Error in TMA-enabled backward_x kernel: {e}")
@@ -905,11 +962,11 @@ def grouped_gemm_backward(
         try:
             logging.info("Computing grad_w with TMA-enabled kernel")
 
-            # Fixed grid size based on SM count
+            # Fixed grid size based on SM count - similar to original approach
             grid = (NUM_SMS,)
 
             _kernel_grouped_gemm_backward_w_scheduled[grid](
-                x_t,
+                x_t,  # Using transposed inputs
                 grad_output,
                 grad_w,
                 group_offsets,
@@ -932,13 +989,15 @@ def grouped_gemm_backward(
                 BLOCK_SIZE_M=BLOCK_SIZE_M,
                 EVEN_K=EVEN_K,
             )
-            logging.info("grad_W computation successful with TMA-enabled kernel")
+            logging.info(
+                "Kernel run success - grad_W computation successful with TMA-enabled kernel"
+            )
         except Exception as e:
             logging.error(f"FAILED: Error in TMA-enabled backward_w kernel: {e}")
             logging.info("WARNING: Falling back to PyTorch for grad_w")
-        # _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
+            _compute_grad_w_pytorch(grad_output, x, m_sizes, grad_w)
 
         return grad_x, grad_w
     except Exception as e:
         logging.error(f"Error in grouped_gemm_backward: {e}")
-        # return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
+        return _pytorch_fallback_backward(grad_output, x, w, m_sizes)
