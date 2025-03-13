@@ -21,10 +21,10 @@ def test_backward_pass():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Test parameters
-        G = 4  # Number of groups
+        G = 10  # Number of groups
         M = 2048  # Input dimension
         N = 2048  # Output dimension per group
-        K = 64  # Hidden dimension
+        K = 256  # Hidden dimension
 
         # Create input and weight tensors
         x = torch.randn(M, K, dtype=torch.bfloat16, device=device, requires_grad=True)
@@ -105,7 +105,20 @@ def test_backward_pass():
         atol = 1e-2  # Absolute tolerance for bfloat16
 
         grad_x_close = torch.allclose(grad_x, x_autograd.grad, rtol=rtol, atol=atol)
+        if not grad_x_close:
+            logging.warning("FAILED: Gradient mismatch detected in grad_x")
+        else:
+            logging.info(
+                "✓ SUCCESS! grad_X matches the PyTorch reference (allclose check passed)"
+            )
+
         grad_w_close = torch.allclose(grad_w, w_autograd.grad, rtol=rtol, atol=atol)
+        if not grad_w_close:
+            logging.warning("FAILED: Gradient mismatch detected in grad_w")
+        else:
+            logging.info(
+                "✓ SUCCESS! grad_W matches the PyTorch reference (allclose check passed)"
+            )
 
         logging.info(
             f"Gradients allclose check - grad_x: {grad_x_close}, grad_w: {grad_w_close}"
