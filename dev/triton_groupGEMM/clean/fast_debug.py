@@ -147,17 +147,17 @@ def test_backward_pass():
             max_idx_x = diff_x.argmax().item()
             flat_idx_x = max_idx_x
             idx_x = np.unravel_index(flat_idx_x, grad_x.shape)
-            logging.error(
+            logging.info(
                 f"Largest grad_x difference at {idx_x}: "
                 f"{grad_x[idx_x].item()} vs {x_autograd.grad[idx_x].item()}"
             )
             # Count zeros
             zeros_grad_x = (grad_x == 0).sum().item()
             zeros_autograd_x = (x_autograd.grad == 0).sum().item()
-            logging.error(
+            logging.info(
                 f"Zeros in grad_x: {zeros_grad_x}/{grad_x.numel()} ({zeros_grad_x/grad_x.numel()*100:.2f}%)"
             )
-            logging.error(
+            logging.info(
                 f"Zeros in x_autograd.grad: {zeros_autograd_x}/{x_autograd.grad.numel()} ({zeros_autograd_x/x_autograd.grad.numel()*100:.2f}%)"
             )
 
@@ -167,17 +167,17 @@ def test_backward_pass():
             max_idx_w = diff_w.argmax().item()
             flat_idx_w = max_idx_w
             idx_w = np.unravel_index(flat_idx_w, grad_w.shape)
-            logging.error(
+            logging.info(
                 f"Largest grad_w difference at {idx_w}: "
                 f"{grad_w[idx_w].item()} vs {w_autograd.grad[idx_w].item()}"
             )
             # Count zeros
             zeros_grad_w = (grad_w == 0).sum().item()
             zeros_autograd_w = (w_autograd.grad == 0).sum().item()
-            logging.error(
+            logging.info(
                 f"Zeros in grad_w: {zeros_grad_w}/{grad_w.numel()} ({zeros_grad_w/grad_w.numel()*100:.2f}%)"
             )
-            logging.error(
+            logging.info(
                 f"Zeros in w_autograd.grad: {zeros_autograd_w}/{w_autograd.grad.numel()} ({zeros_autograd_w/w_autograd.grad.numel()*100:.2f}%)"
             )
 
