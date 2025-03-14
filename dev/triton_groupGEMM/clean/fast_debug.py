@@ -28,10 +28,12 @@ def test_backward_pass():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Test parameters
-        G = 20  # Number of groups
-        M = 1024  # Input dimension
-        N = 512  # Output dimension per group
-        K = 256  # Hidden dimension
+        G = 4  # Number of groups
+        M = 8192  # Input dimension
+        N = 7168  # Output dimension per group
+        K = 4096  # Hidden dimension
+
+        # Deepseek: num_groups, m, k, n in ((4, 8192, 7168, 4096), (4, 8192, 2048, 7168), (8, 4096, 7168, 4096), (8, 4096, 2048, 7168))
 
         # Create input and weight tensors
         x = torch.randn(M, K, dtype=torch.bfloat16, device=device, requires_grad=True)
