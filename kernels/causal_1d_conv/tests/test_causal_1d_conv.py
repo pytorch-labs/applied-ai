@@ -17,7 +17,6 @@ sys.path.insert(0, str(base_path / "../causal_1d_conv"))
 
 try:
     from causal_1d_conv import causal_conv1d_fn
-    from causal_1d_conv import causal_conv1d_update
 except ImportError:
     raise
 
