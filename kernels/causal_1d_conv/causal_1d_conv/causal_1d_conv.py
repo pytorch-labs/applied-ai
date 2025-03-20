@@ -71,7 +71,7 @@ def _causal_conv1d_fwd_kernel(
     if HAS_BIAS:
         bias = bias_ptr + idx_feats
         mask_bias = idx_feats < dim
-        acc = tl.load(bias, mask=mask_bias, other=0.0)[None, :]  # [BLOCK_N]
+        acc = tl.load(bias, mask=mask_bias, other=0.0).to(tl.float32)[None, :]  # [BLOCK_N]
         acc = tl.broadcast_to(acc, (BLOCK_M, BLOCK_N))
     else:
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
@@ -119,13 +119,13 @@ def _causal_conv1d_fwd_kernel(
 
 
 def causal_conv1d_fwd(
-    x,
-    weight,
-    bias=None,
-    seq_idx=None,
-    initial_states=None,
-    return_final_states=False,
-    final_states_out=None,
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor] = None,
+    seq_idx: Optional[torch.Tensor] = None,
+    initial_states: Optional[torch.Tensor] = None,
+    return_final_states: Optional[torch.Tensor] = False,
+    final_states_out: Optional[torch.Tensor] = None,
     activation: Optional[Literal["silu", "swish"]] = None,
 ):
     batch, dim, seqlen = x.shape
@@ -295,7 +295,7 @@ class CausalConv1dFn(torch.autograd.Function):
 def causal_conv1d_fn(
     x,  # channel last, i.e. (batch, dim, seqlen)
     weight,  # (dim, w)
-    bias=None,  # (1, )scalar
+    bias=None,  # (dim, )scalar
     seq_idx=None,
     initial_states=None,
     return_final_states=False,
