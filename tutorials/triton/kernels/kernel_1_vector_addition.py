@@ -17,7 +17,7 @@ def vector_addition_kernel(
     y_ptr,
     output_ptr,
 
-    # the size of the dimension we are reducing over
+    # the total count of the inputs we are summing over
     n_elements,
 
     # the stride of the input and output tensors
@@ -30,18 +30,20 @@ def vector_addition_kernel(
     y_stride: tl.constexpr,
     output_stride: tl.constexpr,
 
-    # the block size for the grid and the mapping of program ID to offsets
+    # the block size for the grid and the multiplier in mapping of program ID to offsets
     BLOCK_SIZE: tl.constexpr,
 
-    # the meta-arguments are the same as in @triton.heuristics
-    # we will see how to use them in a bit
-    META_BLOCK_SIZE: tl.constexpr,
 ):
     # the program ID is the unique identifier for each threadblock (note block!) in the grid
     # each PID will handle 'BLOCK_SIZE' elements
     pid = tl.program_id(axis=0)  # the grid is 1D so axis=0 means we move along the x-axis or columns in this case.
-    block_start = pid * BLOCK_SIZE  # assuming pid==2, BLOCK_SIZE==128, then our current program will start at block_start==256
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # tl.arange(0, BLOCK_SIZE) will give us a range of 0 to 127, so offsets will be 256 to 383
+    block_start = pid * BLOCK_SIZE  # example: assuming pid==2, BLOCK_SIZE==128, then our current program will start at block_start==256
+
+    # tl.arange(0, BLOCK_SIZE) will give us a range of 0 to 127, added to the block_start,
+     # so offsets will be 256 to 383
+     # note: tl.arange only generates a range of numbers that are power of 2 sizes, so we need to use the mask to
+     # handle cases where the input is not a power of 2 size (i.e. 257 elements)
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
 
     # the offsets for the input tensors
     x_offsets = offsets * x_stride  # stride is 1, so x_offsets will be 256 to 383
@@ -62,27 +64,36 @@ def vector_addition_kernel(
 
 
 # the kernel wrapper is a regular Python function that interfaces with PyTorch
-# it is responsible for launching the kernel and copying data to and from the GPU
-# we will see how to use it in a bit
+# it is responsible for verifying the inputs, creating output buffers for results, and launching the kernel
+# with appropriate grid size and information such as input strides
 def vector_addition(x, y):
+
+    # lets' first make sure that the input tensors are on the GPU
+    assert x.is_cuda and y.is_cuda, "Input tensors must be on GPU!"
+    # we need to also make sure that a and b are the same size
+    assert x.numel() == y.numel(), "Input tensors must be the same size!"
+
+
     # the output shape is the same as the input shape
     output = torch.empty_like(x)
 
-    # the grid is the number of elements in the input tensor
-    # we will see how to use it in a bit
+    # the grid is the number of program blocks we need to launch to handle the entire input
+    # cdiv just means ceiling division, so it returns the smallest integer >= x / y ensuring we always
+    # launch enough program blocks to handle the entire input
     grid = lambda meta: (triton.cdiv(x.numel(), meta['BLOCK_SIZE']),)
 
-    # launch the kernel
+    # launch the kernel, note the grid is a lambda function that takes in the meta-arguments
     vector_addition_kernel[grid](
         # pass the pointers to the input and output tensors
         x_ptr=x,
         y_ptr=y,
         output_ptr=output,
 
-        # pass the size of the dimension we are reducing over
+        # pass the total count of the input we are summing
         n_elements=x.numel(),
 
-        # pass the strides of the input and output tensors
+        # pass the strides (how many data element size jumps to get to the next element) of the input and output tensors
+        # in this case, everything is contiguous, so we pass 1
         x_stride=1,
         y_stride=1,
         output_stride=1,
@@ -90,8 +101,6 @@ def vector_addition(x, y):
         # pass the block size for the grid and the mapping of program ID to offsets
         BLOCK_SIZE=128,
 
-        # pass the meta-arguments
-        META_BLOCK_SIZE=128,
     )
 
     # return the output tensor
@@ -101,11 +110,14 @@ def vector_addition(x, y):
 if __name__ == "__main__":
     # two tests - one for power of 2 size and one for non power of 2 size
     # the non power of 2 size is to test the mask functionality
-    # create a random input tensor
+    # create a random, power of 2 size, input tensor
+
+    # Test 1: power of 2 size (1024!)
+
     x = torch.randn(1024, device='cuda')
     y = torch.randn(1024, device='cuda')
 
-    # we can now use the kernel wrapper to perform a vector addition
+    # we can then use the kernel wrapper to perform a vector addition
 
     output = vector_addition(x, y)
 
@@ -116,6 +128,7 @@ if __name__ == "__main__":
 
     print(f"{output=}")
 
+    # Test 2: non power of 2 size (257!)
     # create a non power of 2 input tensor
     x = torch.randn(257, device='cuda')
     y = torch.randn(257, device='cuda')
@@ -127,6 +140,6 @@ if __name__ == "__main__":
     # verify the result with PyTorch reference implementation
     output_ref_np2 = x + y
     assert torch.allclose(output_np2, output_ref_np2)
-    print("Success with non power of 2 size (257!")
+    print("Success with non power of 2 size (num_elems = 257!)")
 
     print(f"{output_np2[0:5]=}")
