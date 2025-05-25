@@ -1,0 +1,5 @@
+# ninja log v5
+1	15202	1748185895110710199	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_02_tma/build/temp.linux-x86_64-cpython-312/sm100_gemm_pytorch.o	342153d32d365f0b
+7	78	1748186494782816813	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_02_tma/build/temp.linux-x86_64-cpython-312/sm100_gemm_pytorch.o	342153d32d365f0b
+6	15086	1748186805607894090	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_02_tma/build/temp.linux-x86_64-cpython-312/sm100_gemm_pytorch.o	342153d32d365f0b
+6	14058	1748187024415643408	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_02_tma/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	6c5f77cfca7cfb81

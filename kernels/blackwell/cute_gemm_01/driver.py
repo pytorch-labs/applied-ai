@@ -67,7 +67,9 @@ def sm100_gemm_f16(A, B, C=None, alpha=1.0, beta=0.0):
     return sm100_gemm.sm100_gemm_f16(A, B, C, alpha, beta)
 
 
-def benchmark_sm100_vs_torch(M=512, N=1024, K=256, num_warmup=10, num_trials=100):
+def benchmark_sm100_vs_torch(
+    M=1024, N=2048, K=256, num_warmup=1, num_trials=10
+):  # M=512, N=1024, K=256, num_warmup=10, num_trials=100):
     """
     Benchmark SM100 GEMM against PyTorch's native GEMM
     """
@@ -81,19 +83,20 @@ def benchmark_sm100_vs_torch(M=512, N=1024, K=256, num_warmup=10, num_trials=100
     # Create test tensors
     A = torch.randn(M, K, dtype=torch.float16, device="cuda")
     B = torch.randn(N, K, dtype=torch.float16, device="cuda")
-    C = torch.randn(M, N, dtype=torch.float32, device="cuda")
+    C = torch.randn(M, N, dtype=torch.float16, device="cuda")
+    C32 = C.to(torch.float32).clone()
 
-    # PyTorch baseline (using mixed precision)
-    A_fp32 = A.float()
-    B_fp32 = B.float()
+    # Keep A and B as FP16 for PyTorch
+    A_fp16 = A
+    B_fp16 = B
 
     # Warmup
     for _ in range(num_warmup):
-        # PyTorch GEMM
-        torch_result = torch.addmm(C, A_fp32, B_fp32.T)
+        # PyTorch GEMM (using FP16)
+        torch_result = torch.addmm(C, A_fp16, B_fp16.T)
 
         # SM100 GEMM
-        sm100_result = sm100_gemm_f16(A, B, C.clone())
+        sm100_result = sm100_gemm_f16(A, B, C32)
 
     torch.cuda.synchronize()
 
@@ -104,7 +107,7 @@ def benchmark_sm100_vs_torch(M=512, N=1024, K=256, num_warmup=10, num_trials=100
 
     start.record()
     for _ in range(num_trials):
-        torch_result = torch.addmm(C, A_fp32, B_fp32.T)
+        torch_result = torch.addmm(C, A_fp16, B_fp16.T)
     end.record()
     torch.cuda.synchronize()
     torch_time = start.elapsed_time(end) / num_trials
@@ -112,13 +115,13 @@ def benchmark_sm100_vs_torch(M=512, N=1024, K=256, num_warmup=10, num_trials=100
     # Benchmark SM100
     start.record()
     for _ in range(num_trials):
-        sm100_result = sm100_gemm_f16(A, B, C.clone())
+        sm100_result = sm100_gemm_f16(A, B, C32)
     end.record()
     torch.cuda.synchronize()
     sm100_time = start.elapsed_time(end) / num_trials
 
     # Check correctness
-    max_diff = torch.max(torch.abs(torch_result - sm100_result))
+    max_diff = torch.max(torch.abs(torch_result - sm100_result.to(torch.float16)))
     rel_error = max_diff / torch.max(torch.abs(torch_result))
 
     # Calculate FLOPS
@@ -164,7 +167,7 @@ if __name__ == "__main__":
 # ==============================================================================
 # Makefile for easy building
 # ==============================================================================
-
+'''
 MAKEFILE_CONTENT = """
 # Makefile for SM100 GEMM PyTorch Extension
 
@@ -204,3 +207,4 @@ print("To build:")
 print("1. Set CUTLASS_PATH environment variable to your CUTLASS installation")
 print("2. Run: make build")
 print("3. Test: make test")
+'''
