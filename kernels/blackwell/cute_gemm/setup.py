@@ -48,11 +48,12 @@ ext_modules = [
                 "-std=c++17",
                 "--expt-relaxed-constexpr",
                 "--expt-extended-lambda",
-                "-gencode=arch=compute_100,code=sm_100",  # SM100 architecture
+                "-gencode=arch=compute_100a,code=sm_100a",  # SM100 architecture
                 "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED",
                 "-DCUTE_SM100_ENABLED",
                 "--use_fast_math",
                 "-Xcompiler=-fPIC",
+                "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED=1",  # Enable TCGEN05_TMEM
             ],
         },
         extra_link_args=["-lcuda", "-lcudart"],
