@@ -910,7 +910,7 @@ if __name__ == "__main__":
     if benchmark_results:
         print(f"\n✅ All tests passed!")
         print(
-            f"SM100 achieved {benchmark_results['speedup']:.2f}x speedup over PyTorch"
+            f"Blackwell Cute GEMM with TMA Loading achieved {benchmark_results['speedup']:.2f}x speedup over PyTorch"
         )
     else:
         print("❌ Benchmark failed")

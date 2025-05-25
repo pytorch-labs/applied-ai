@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: sm100_gemm
+Version: 0.0.0
+Requires-Python: >=3.8
+Requires-Dist: torch>=1.12.0
+Dynamic: requires-dist
+Dynamic: requires-python
