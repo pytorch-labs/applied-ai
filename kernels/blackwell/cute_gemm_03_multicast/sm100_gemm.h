@@ -146,9 +146,9 @@ cudaError_t launch_sm100_gemm_f16(void *d_A, void *d_B, void *d_C, void *d_D,
 cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
                                                 void *d_D, int M, int N, int K,
                                                 float alpha, float beta,
-                                                cudaStream_t stream = 0,
-                                                int cluster_m = 2,
-                                                int cluster_n = 2);
+                                                cudaStream_t stream = 0); //,
+// int cluster_m = 2,
+// int cluster_n = 2);
 
 /**
  * @brief Check if SM100 GEMM operations are supported on current device

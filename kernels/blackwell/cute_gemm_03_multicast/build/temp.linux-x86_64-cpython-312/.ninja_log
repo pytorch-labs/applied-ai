@@ -4,3 +4,7 @@
 8	15182	1748225926814116574	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	e26104059a2cdb37
 8	15891	1748226020535436685	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm_pytorch.o	f4a4bac16e3d9559
 15	14578	1748226267358275625	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	e26104059a2cdb37
+14	14555	1748228450546771278	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	e26104059a2cdb37
+7	14914	1748228498876937033	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	e26104059a2cdb37
+8	14709	1748305391605939133	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm.o	e26104059a2cdb37
+8	15827	1748305392713943214	/data/users/less/applied-ai/kernels/blackwell/cute_gemm_03_multicast/build/temp.linux-x86_64-cpython-312/sm100_gemm_pytorch.o	f4a4bac16e3d9559

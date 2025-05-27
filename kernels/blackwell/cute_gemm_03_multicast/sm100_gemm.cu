@@ -135,6 +135,7 @@ __global__ static void gemm_device_tma_multicast_enhanced(
   Layout cluster_layout_vmnk = tiled_divide(
       make_layout(cluster_shape), make_tile(typename TiledMMA::AtomThrID{}));
 
+  // MMA-M, N, K
   auto mma_coord_vmnk =
       make_coord(blockIdx.x % size<0>(cluster_layout_vmnk),
                  blockIdx.x / size<0>(cluster_layout_vmnk), blockIdx.y, _);
@@ -142,26 +143,19 @@ __global__ static void gemm_device_tma_multicast_enhanced(
   auto mma_coord = select<1, 2, 3>(mma_coord_vmnk);
 
   // Improved tensor partitioning with bounds checking
+  // local tile = (tensor to partition, tiler to use, coordinate, step to move
+  // along)
   Tensor gA = local_tile(mA, mma_tiler, mma_coord, Step<_1, X, _1>{});
   Tensor gB = local_tile(mB, mma_tiler, mma_coord, Step<X, _1, _1>{});
   Tensor gC = local_tile(mC, mma_tiler, mma_coord, Step<_1, _1, X>{});
   Tensor gD = local_tile(mD, mma_tiler, mma_coord, Step<_1, _1, X>{});
 
-  // Enhanced shared memory allocation with error checking
+  //__syncthreads();
+
+  // Allocate shared memory
   extern __shared__ char shared_memory[];
   SharedStorage &shared_storage =
       *reinterpret_cast<SharedStorage *>(shared_memory);
-
-  // Initialize shared storage
-  if (threadIdx.x == 0) {
-    shared_storage.tmem_allocation_size = 0;
-#ifdef DEBUG
-    for (int i = 0; i < 8; ++i) {
-      shared_storage.debug_counters[i] = 0;
-    }
-#endif
-  }
-  __syncthreads();
 
   Tensor tCsA = shared_storage.tensor_sA();
   Tensor tCsB = shared_storage.tensor_sB();
@@ -177,29 +171,23 @@ __global__ static void gemm_device_tma_multicast_enhanced(
   // Fragment allocation with validation
   Tensor tCrA = cta_mma.make_fragment_A(tCsA);
   Tensor tCrB = cta_mma.make_fragment_B(tCsB);
+  // tmem allocation
   Tensor tCtAcc = cta_mma.make_fragment_C(tCgC);
 
-  uint32_t elect_one_thr = elect_one_thread();
-  uint32_t elect_one_warp = is_warp_leader();
+  uint32_t elect_one_thr = cute::elect_one_sync();
+  uint32_t elect_one_warp = (threadIdx.x / 32 == 0); // is_warp_leader();
 
-  // Enhanced TMEM allocation with better error handling
   using TmemAllocator = cute::TMEM::Allocator1Sm;
   TmemAllocator tmem_allocator{};
 
   if (elect_one_warp) {
-    auto allocation_size = TmemAllocator::Sm100TmemCapacityColumns;
-    tmem_allocator.allocate(allocation_size, &shared_storage.tmem_base_ptr);
-    shared_storage.tmem_allocation_size = allocation_size;
+    tmem_allocator.allocate(TmemAllocator::Sm100TmemCapacityColumns,
+                            &shared_storage.tmem_base_ptr);
   }
-  __syncthreads();
-
-  // Validate TMEM allocation
-  if (shared_storage.tmem_allocation_size == 0) {
-    // TMEM allocation failed - early return
-    return;
-  }
+  __syncthreads(); // wait for all threads until warp0 allocates TMEM
 
   tCtAcc.data() = shared_storage.tmem_base_ptr;
+  // Finished TMEM allocation
 
   // Enhanced TMA Multicast Setup with better mask calculation
   auto cta_in_cluster_coord_vmnk =
@@ -227,30 +215,29 @@ __global__ static void gemm_device_tma_multicast_enhanced(
                                       cta_in_cluster_coord_vmnk);
 
   // Calculate transaction bytes with overflow protection
-  size_t tma_transaction_bytes_a = sizeof(make_tensor_like(tAsA));
-  size_t tma_transaction_bytes_b = sizeof(make_tensor_like(tBsB));
-  int tma_transaction_bytes = static_cast<int>(
-      std::min(tma_transaction_bytes_a + tma_transaction_bytes_b,
-               static_cast<size_t>(INT_MAX)));
+  // size_t tma_transaction_bytes_a = sizeof(make_tensor_like(tAsA));
+  // size_t tma_transaction_bytes_b = sizeof(make_tensor_like(tBsB));
+  // int tma_transaction_bytes = static_cast<int>(
+  //    std::min(tma_transaction_bytes_a + tma_transaction_bytes_b,
+  //             static_cast<size_t>(INT_MAX)));
+  int tma_transaction_bytes =
+      sizeof(make_tensor_like(tAsA)) + sizeof(make_tensor_like(tBsB));
 
-  // Enhanced barrier initialization with participant count validation
+  // Barrier Initialization
+  // Barriers in SMEM initialized by a single thread.
   if (elect_one_warp && elect_one_thr) {
+    // The number of CTAs that participates in multicast operation with this CTA
+    // (for both A and B matrices)
     int num_mcast_participants =
-        static_cast<int>(size<1>(cluster_layout_vmnk)) +
-        static_cast<int>(size<2>(cluster_layout_vmnk)) - 1;
-
-    // Validate participant count
-    if (num_mcast_participants > 0 &&
-        num_mcast_participants <= MAX_CLUSTER_SIZE) {
-      cute::initialize_barrier(shared_storage.mma_barrier,
-                               num_mcast_participants);
-      cute::initialize_barrier(shared_storage.tma_barrier, 1);
-    }
+        size<1>(cluster_layout_vmnk) + size<2>(cluster_layout_vmnk) - 1;
+    cute::initialize_barrier(shared_storage.mma_barrier,
+                             /* num_ctas */ num_mcast_participants);
+    cute::initialize_barrier(shared_storage.tma_barrier, /* num_threads */ 1);
   }
-
-  int mma_barrier_phase_bit = 0;
-  int tma_barrier_phase_bit = 0;
-  cute::cluster_sync();
+  int mma_barrier_phase_bit = 0; // Each barrier has an associated phase_bit.
+  int tma_barrier_phase_bit = 0; // Each barrier has an associated phase_bit.
+  cute::cluster_sync(); // Make sure all threads across all CTAs in Cluster
+                        // observe barrier initialization.
 
   // Enhanced mainloop with better synchronization
   tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
@@ -270,15 +257,17 @@ __global__ static void gemm_device_tma_multicast_enhanced(
            tBgB(_, k_tile), tBsB);
     }
 
-    // Enhanced synchronization
-    safe_barrier_wait(shared_storage.tma_barrier, tma_barrier_phase_bit);
+    // Wait for TMA loads to SMEM to complete
+    cute::wait_barrier(shared_storage.tma_barrier, tma_barrier_phase_bit);
+    tma_barrier_phase_bit ^= 1;
 
     // Enhanced MMA execution with better loop unrolling
     if (elect_one_warp) {
       const int k_blocks = static_cast<int>(size<2>(tCrA));
 
-#pragma unroll
+      // #pragma unroll
       for (int k_block = 0; k_block < k_blocks; ++k_block) {
+
         gemm(tiled_mma, tCrA(_, _, k_block), tCrB(_, _, k_block), tCtAcc);
         tiled_mma.accumulate_ = UMMA::ScaleOut::One;
       }
@@ -287,7 +276,9 @@ __global__ static void gemm_device_tma_multicast_enhanced(
                                            mma_mcast_mask_c);
     }
 
-    safe_barrier_wait(shared_storage.mma_barrier, mma_barrier_phase_bit);
+    // safe_barrier_wait(shared_storage.mma_barrier, mma_barrier_phase_bit);
+    cute::wait_barrier(shared_storage.mma_barrier, mma_barrier_phase_bit);
+    mma_barrier_phase_bit ^= 1;
   }
 
   // Enhanced epilogue with better memory coalescing
@@ -303,6 +294,7 @@ __global__ static void gemm_device_tma_multicast_enhanced(
   Tensor tDgD = thr_t2r_copy.partition_D(tCgD);
   using AccType = typename decltype(tCtAcc)::value_type;
   Tensor tDrAcc = make_tensor<AccType>(shape(tDgD));
+  // load tmem to register
   copy(tiled_t2r_copy, tDtAcc, tDrAcc);
 
   // Enhanced AXPBY with better numerical stability
@@ -311,15 +303,14 @@ __global__ static void gemm_device_tma_multicast_enhanced(
 
   __syncthreads();
 
-  // Enhanced cleanup with proper error handling
-  if (elect_one_warp && shared_storage.tmem_allocation_size > 0) {
+  if (elect_one_warp) {
     tmem_allocator.release_allocation_lock();
     tmem_allocator.free(shared_storage.tmem_base_ptr,
-                        shared_storage.tmem_allocation_size);
+                        TmemAllocator::Sm100TmemCapacityColumns);
   }
 }
 
-// Enhanced cluster size optimization function
+/* // Enhanced cluster size optimization function
 std::pair<int, int> optimize_cluster_configuration(int M, int N, int K) {
   // Calculate memory requirements more accurately
   size_t memory_bytes = static_cast<size_t>(M) * K * 2 +    // A matrix
@@ -337,6 +328,7 @@ std::pair<int, int> optimize_cluster_configuration(int M, int N, int K) {
     return {1, 1}; // Small matrices - single CTA
   }
 }
+  */
 
 // Enhanced validation function
 bool validate_gemm_parameters(int M, int N, int K) {
@@ -364,9 +356,9 @@ bool validate_gemm_parameters(int M, int N, int K) {
 cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
                                                 void *d_D, int M, int N, int K,
                                                 float alpha, float beta,
-                                                cudaStream_t stream,
-                                                int cluster_m, int cluster_n) {
-
+                                                cudaStream_t stream) //,
+// int cluster_m, int cluster_n)
+{
   // Enhanced input validation
   if (!d_A || !d_B || !d_C || !d_D) {
     return cudaErrorInvalidValue;
@@ -376,12 +368,10 @@ cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
     return cudaErrorInvalidValue;
   }
 
-  if (cluster_m <= 0 || cluster_n <= 0 || cluster_m > 8 || cluster_n > 8 ||
-      cluster_m * cluster_n > MAX_CLUSTER_SIZE) {
-    return cudaErrorInvalidValue;
-  }
-  cluster_m = 4;
-  cluster_n = 4;
+  // if (cluster_m <= 0 || cluster_n <= 0 || cluster_m > 8 || cluster_n > 8 ||
+  //     cluster_m * cluster_n > MAX_CLUSTER_SIZE) {
+  //   return cudaErrorInvalidValue;
+  // }
 
   // Define types with explicit templates
   using TypeA = cutlass::half_t;
@@ -436,7 +426,8 @@ cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
       SharedStorage<TypeA, TypeB, decltype(sA_layout), decltype(sB_layout)>;
 
   // Enhanced cluster configuration with validation
-  auto cluster_shape = make_shape(Int<1>{}, cluster_m, cluster_n);
+  auto cluster_shape = make_shape(Int<4>{}, Int<4>{}, Int<1>{});
+
   Layout cluster_layout_vmnk =
       tiled_divide(make_layout(cluster_shape),
                    make_tile(typename decltype(tiled_mma)::AtomThrID{}));
@@ -483,11 +474,11 @@ cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
   }
 
   // Optional: Set additional attributes for better performance
-  error = cudaFuncSetAttribute(
-      kernel_ptr, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-  if (error != cudaSuccess) {
-    // Non-critical error, continue
-  }
+  // error = cudaFuncSetAttribute(
+  //    kernel_ptr, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+  // if (error != cudaSuccess) {
+  // Non-critical error, continue
+  //}
 
   // Enhanced kernel launch with comprehensive error handling
   cutlass::ClusterLaunchParams params = {dimGrid, dimBlock, dimCluster,
@@ -517,16 +508,17 @@ cudaError_t launch_sm100_gemm_f16(void *d_A, void *d_B, void *d_C, void *d_D,
                                   int M, int N, int K, float alpha, float beta,
                                   cudaStream_t stream) {
   // Automatic cluster size optimization
-  auto [cluster_m, cluster_n] = optimize_cluster_configuration(M, N, K);
+  // auto [cluster_m, cluster_n] = optimize_cluster_configuration(M, N, K);
 
-  return launch_sm100_gemm_f16_tma_multicast(
-      d_A, d_B, d_C, d_D, M, N, K, alpha, beta, stream, cluster_m, cluster_n);
+  return launch_sm100_gemm_f16_tma_multicast(d_A, d_B, d_C, d_D, M, N, K, alpha,
+                                             beta,
+                                             stream); //, cluster_m, cluster_n);
 }
 
 #else
 
 // Fallback implementation for non-SM100 builds
-cudaError_t launch_sm100_gemm_f16(void *d_A, void *d_B, void *d_C, void *d_D,
+/*cudaError_t launch_sm100_gemm_f16(void *d_A, void *d_B, void *d_C, void *d_D,
                                   int M, int N, int K, float alpha, float beta,
                                   cudaStream_t stream) {
   return cudaErrorNotSupported;
@@ -535,9 +527,10 @@ cudaError_t launch_sm100_gemm_f16(void *d_A, void *d_B, void *d_C, void *d_D,
 cudaError_t launch_sm100_gemm_f16_tma_multicast(void *d_A, void *d_B, void *d_C,
                                                 void *d_D, int M, int N, int K,
                                                 float alpha, float beta,
-                                                cudaStream_t stream,
-                                                int cluster_m, int cluster_n) {
+                                                cudaStream_t stream) //,
+// int cluster_m, int cluster_n)
+{
   return cudaErrorNotSupported;
 }
-
+*/
 #endif // CUTLASS_ARCH_MMA_SM100_SUPPORTED
