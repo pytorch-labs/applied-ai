@@ -39,7 +39,7 @@ def benchmark_sm100_vs_torch(
         torch_result = torch.addmm(C, A_fp16, B_fp16.T)
 
         # SM100 GEMM
-        sm100_result = gemm_f16(A_fp16, B_fp16, C32)
+        sm100_result = gemm_f16(A, B, C32)
 
     torch.cuda.synchronize()
 
@@ -75,7 +75,7 @@ def benchmark_sm100_vs_torch(
     print(f"PyTorch time: {torch_time:.3f} ms ({torch_tflops:.2f} TFLOPS)")
     print(f"SM100 time: {sm100_time:.3f} ms ({sm100_tflops:.2f} TFLOPS)")
     print(f"Speedup: {torch_time/sm100_time:.2f}x")
-    print(f"Max difference: {max_diff:.6f}")
+    # print(f"Max difference: {max_diff:.6f}")
     print(f"Relative error: {rel_error:.6f}")
 
     return {
@@ -84,7 +84,7 @@ def benchmark_sm100_vs_torch(
         "speedup": torch_time / sm100_time,
         "torch_tflops": torch_tflops,
         "sm100_tflops": sm100_tflops,
-        "max_diff": max_diff.item(),
+        # "max_diff": max_diff.item(),
         "rel_error": rel_error.item(),
     }
 
@@ -94,17 +94,13 @@ if __name__ == "__main__":
     # Test basic functionality
     print("Testing SM100 GEMM...")
 
-    M, N, K = 1024, 8192 * 2, 2048
+    M, N, K = 512, 1024, 256
     A = torch.randn(M, K, dtype=torch.float16, device="cuda")
     B = torch.randn(N, K, dtype=torch.float16, device="cuda")
     C = torch.randn(M, N, dtype=torch.float32, device="cuda")
 
     # Test the GEMM
-    result = gemm_f16(
-        A,
-        B,
-        C,
-    )  # alpha=1.0, beta=0.5)
+    result = gemm_f16(A, B, C, alpha=1.0, beta=0.5)
     print(f"Result shape: {result.shape}, dtype: {result.dtype}")
 
     # Run benchmark
