@@ -631,10 +631,9 @@ class SM100Benchmark:
         A_fp32 = A.float()
         B_fp32 = B.float()
 
-        # Warmup both implementations
-        for _ in range(10):
+        # Warmup
+        for _ in range(1):
             torch_result = torch.addmm(C, A_fp32, B_fp32.T)
-            sm100_result = sm100_gemm_f16(A, B, C.clone(), validate_inputs=False)
 
         torch.cuda.synchronize()
 
@@ -645,6 +644,9 @@ class SM100Benchmark:
         torch_time = get_torch_time() / num_trials
 
         # Benchmark SM100
+        for _ in range(1):
+            sm100_result = sm100_gemm_f16(A, B, C.clone(), validate_inputs=False)
+        torch.cuda.synchronize()
         with cuda_timing() as get_sm100_time:
             for _ in range(num_trials):
                 sm100_result = sm100_gemm_f16(A, B, C.clone(), validate_inputs=False)
@@ -741,7 +743,7 @@ def demonstrate_features():
     # 6. Performance comparison
     print("6. Performance Comparison with PyTorch:")
     benchmark = SM100Benchmark()
-    comparison = benchmark.compare_with_torch(1024, 1024, 1024, num_trials=20)
+    comparison = benchmark.compare_with_torch(8192, 8192 * 2, 2048, num_trials=20)
     print()
 
     print("=== Demonstration Complete ===")
