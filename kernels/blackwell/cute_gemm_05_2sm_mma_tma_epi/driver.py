@@ -87,6 +87,44 @@ def benchmark_pytorch_gemm(
     torch.cuda.synchronize()
     torch_addmm_time = (time.perf_counter() - start_time) / num_runs
 
+    return {
+        "torch_mm": torch_mm_time,
+        "torch_addmm": torch_addmm_time,
+    }
+
+
+def benchmark_pytorch_gemm_autocast(
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    alpha: float,
+    beta: float,
+    num_warmup: int = 10,
+    num_runs: int = 100,
+) -> Dict[str, float]:
+    """Benchmark PyTorch GEMM implementations"""
+
+    # Warmup
+    for _ in range(num_warmup):
+        _ = alpha * torch.mm(A.float(), B.float().t()) + beta * C
+
+    torch.cuda.synchronize()
+
+    # Benchmark torch.mm with manual scaling
+    start_time = time.perf_counter()
+    for _ in range(num_runs):
+        result = alpha * torch.mm(A.float(), B.float().t()) + beta * C
+    torch.cuda.synchronize()
+    torch_mm_time = (time.perf_counter() - start_time) / num_runs
+
+    # Benchmark torch.addmm (more optimized)
+    torch.cuda.synchronize()
+    start_time = time.perf_counter()
+    for _ in range(num_runs):
+        result = torch.addmm(C, A.float(), B.float().t(), alpha=alpha, beta=beta)
+    torch.cuda.synchronize()
+    torch_addmm_time = (time.perf_counter() - start_time) / num_runs
+
     # Benchmark with mixed precision (if available)
     try:
         torch.cuda.synchronize()
@@ -378,7 +416,7 @@ def run_benchmark_suite(
                     min([t for t in r["pytorch_times"].values() if t != float("inf")])
                     / r["cute_time"]
                 )
-                print(f"{M}×{N}×{K:<15} {tflops:<15.1f} {speedup:<10.2f}x")
+                print(f"{M}×{N}×{K:<15} {tflops:<15.1f} {speedup:<3.2f}x")
         else:
             print("No successful CuTe runs")
     else:
@@ -391,7 +429,12 @@ def main():
         "--sizes",
         nargs="+",
         type=str,
-        default=["512,1024,256", "1024,2048,512", "2048,4096,1024"],
+        default=[
+            "4096,8192,2048",
+            "2048,2048,1024",
+            "4096,4096,2048",
+            "8192,8192,2048",
+        ],
         help="Problem sizes as M,N,K (e.g., 512,1024,256)",
     )
     parser.add_argument("--alpha", type=float, default=1.0, help="Alpha scaling factor")
