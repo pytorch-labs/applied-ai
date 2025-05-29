@@ -1,6 +1,12 @@
-import grouped_gemm_cuda
 import numpy as np
 import torch
+
+try:
+    import grouped_gemm_cuda
+except ImportError:
+    raise ImportError(
+        "grouped_gemm_cuda C++ extension not found. Make sure it's properly installed."
+    )
 
 
 def test_grouped_gemm():
