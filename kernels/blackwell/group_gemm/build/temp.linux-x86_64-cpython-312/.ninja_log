@@ -1,2 +1,4 @@
 # ninja log v5
-0	16302	1748539692464476854	/data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o	ad43f177cd0d2e6e
+0	87	1748545013753011913	/data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o	ad43f177cd0d2e6e
+8	16410	1748545145181498068	/data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o	ad43f177cd0d2e6e
+8	16546	1748545259355922377	/data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o	ad43f177cd0d2e6e
