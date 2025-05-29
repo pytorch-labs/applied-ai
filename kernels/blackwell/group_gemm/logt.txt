@@ -1,0 +1,282 @@
+running install
+running bdist_egg
+running egg_info
+writing grouped_gemm_cuda.egg-info/PKG-INFO
+writing dependency_links to grouped_gemm_cuda.egg-info/dependency_links.txt
+writing requirements to grouped_gemm_cuda.egg-info/requires.txt
+writing top-level names to grouped_gemm_cuda.egg-info/top_level.txt
+reading manifest file 'grouped_gemm_cuda.egg-info/SOURCES.txt'
+writing manifest file 'grouped_gemm_cuda.egg-info/SOURCES.txt'
+installing library code to build/bdist.linux-x86_64/egg
+running install_lib
+running build_ext
+building 'grouped_gemm_cuda' extension
+[1/1] c++ -MMD -MF /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o.d -pthread -B /home/less/.conda/envs/pycutlass/compiler_compat -fno-strict-overflow -Wsign-compare -DNDEBUG -O2 -Wall -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -I/home/less/local/cutlass40/include -I/home/less/local/cutlass40/tools/util/include -I/home/less/local/cutlass40/examples/common -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/less/.conda/envs/pycutlass/include/python3.12 -c -c /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp -o /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o -std=c++17 -O3 -DCUTLASS_ARCH_MMA_SM100_SUPPORTED -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=grouped_gemm_cuda
+FAILED: /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o 
+c++ -MMD -MF /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o.d -pthread -B /home/less/.conda/envs/pycutlass/compiler_compat -fno-strict-overflow -Wsign-compare -DNDEBUG -O2 -Wall -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -I/home/less/local/cutlass40/include -I/home/less/local/cutlass40/tools/util/include -I/home/less/local/cutlass40/examples/common -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/less/.conda/envs/pycutlass/include/python3.12 -c -c /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp -o /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o -std=c++17 -O3 -DCUTLASS_ARCH_MMA_SM100_SUPPORTED -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=grouped_gemm_cuda
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp: In function ‘at::Tensor grouped_gemm(const std::vector<at::Tensor>&, const std::vector<at::Tensor>&, const std::vector<at::Tensor>&, float, float, bool, const string&)’:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:46:7: error: ‘__CUDACC_VER_MAJOR__’ was not declared in this scope
+   46 |   if (__CUDACC_VER_MAJOR__ < 12 ||
+      |       ^~~~~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:47:38: error: ‘__CUDACC_VER_MINOR__’ was not declared in this scope
+   47 |       (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 8)) {
+      |                                      ^~~~~~~~~~~~~~~~~~~~
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/c10/util/Exception.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/BlasBackend.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/Context.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/ATen.h:7,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:1:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:66:32: warning: comparison of integer expressions of different signedness: ‘std::vector<at::Tensor>::size_type’ {aka ‘long unsigned int’} and ‘const int’ [-Wsign-compare]
+   66 |   TORCH_CHECK(B_tensors.size() == num_groups,
+      |               ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/c10/macros/Macros.h:193:64: note: in definition of macro ‘C10_UNLIKELY’
+  193 | #define C10_UNLIKELY(expr) (__builtin_expect(static_cast<bool>(expr), 0))
+      |                                                                ^~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/c10/util/Exception.h:587:7: note: in expansion of macro ‘C10_UNLIKELY_OR_CONST’
+  587 |   if (C10_UNLIKELY_OR_CONST(!(cond))) {            \
+      |       ^~~~~~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:66:3: note: in expansion of macro ‘TORCH_CHECK’
+   66 |   TORCH_CHECK(B_tensors.size() == num_groups,
+      |   ^~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:68:32: warning: comparison of integer expressions of different signedness: ‘std::vector<at::Tensor>::size_type’ {aka ‘long unsigned int’} and ‘const int’ [-Wsign-compare]
+   68 |   TORCH_CHECK(C_tensors.size() == num_groups,
+      |               ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/c10/macros/Macros.h:193:64: note: in definition of macro ‘C10_UNLIKELY’
+  193 | #define C10_UNLIKELY(expr) (__builtin_expect(static_cast<bool>(expr), 0))
+      |                                                                ^~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/c10/util/Exception.h:587:7: note: in expansion of macro ‘C10_UNLIKELY_OR_CONST’
+  587 |   if (C10_UNLIKELY_OR_CONST(!(cond))) {            \
+      |       ^~~~~~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:68:3: note: in expansion of macro ‘TORCH_CHECK’
+   68 |   TORCH_CHECK(C_tensors.size() == num_groups,
+      |   ^~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:76:3: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+   76 |   grouped_gemm::GroupedGemmParams params(num_groups);
+      |   ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:77:3: error: ‘params’ was not declared in this scope; did you mean ‘c10::attr::params’?
+   77 |   params.alpha = alpha;
+      |   ^~~~~~
+      |   c10::attr::params
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/ir/ir.h:18,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/function_impl.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/method.h:7,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/object.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/module.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/input-archive.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/archive.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers/serialize.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers.h:8,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets/chunk.h:6,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/all.h:9,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/extension.h:5,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:5:
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/aten_interned_strings.h:2053:9: note: ‘c10::attr::params’ declared here
+ 2053 | _(attr, params) \
+      |         ^~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:351:35: note: in definition of macro ‘DEFINE_SYMBOL’
+  351 |   namespace ns { constexpr Symbol s(static_cast<unique_t>(_keys::ns##_##s)); }
+      |                                   ^
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:298:3: note: in expansion of macro ‘FORALL_ATTR_BASE_SYMBOLS’
+  298 |   FORALL_ATTR_BASE_SYMBOLS(_)        \
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:352:1: note: in expansion of macro ‘FORALL_NS_SYMBOLS’
+  352 | FORALL_NS_SYMBOLS(DEFINE_SYMBOL)
+      | ^~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:81:31: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+   81 |                             ? grouped_gemm::RasterOrder::AlongN
+      |                               ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:82:31: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+   82 |                             : grouped_gemm::RasterOrder::AlongM;
+      |                               ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:121:45: error: ‘ElementA’ was not declared in this scope
+  121 |     params.A_ptrs.push_back(get_cutlass_ptr<ElementA>(A));
+      |                                             ^~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:121:54: error: no matching function for call to ‘get_cutlass_ptr<<expression error> >(const at::Tensor&)’
+  121 |     params.A_ptrs.push_back(get_cutlass_ptr<ElementA>(A));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note: candidate: ‘template<class CutlassType> CutlassType* get_cutlass_ptr(const at::Tensor&)’
+   22 | CutlassType *get_cutlass_ptr(const torch::Tensor &tensor) {
+      |              ^~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note:   template argument deduction/substitution failed:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:121:54: error: template argument 1 is invalid
+  121 |     params.A_ptrs.push_back(get_cutlass_ptr<ElementA>(A));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:122:45: error: ‘ElementB’ was not declared in this scope
+  122 |     params.B_ptrs.push_back(get_cutlass_ptr<ElementB>(B));
+      |                                             ^~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:122:54: error: no matching function for call to ‘get_cutlass_ptr<<expression error> >(const at::Tensor&)’
+  122 |     params.B_ptrs.push_back(get_cutlass_ptr<ElementB>(B));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note: candidate: ‘template<class CutlassType> CutlassType* get_cutlass_ptr(const at::Tensor&)’
+   22 | CutlassType *get_cutlass_ptr(const torch::Tensor &tensor) {
+      |              ^~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note:   template argument deduction/substitution failed:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:122:54: error: template argument 1 is invalid
+  122 |     params.B_ptrs.push_back(get_cutlass_ptr<ElementB>(B));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:123:45: error: ‘ElementC’ was not declared in this scope
+  123 |     params.C_ptrs.push_back(get_cutlass_ptr<ElementC>(C));
+      |                                             ^~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:123:54: error: no matching function for call to ‘get_cutlass_ptr<<expression error> >(const at::Tensor&)’
+  123 |     params.C_ptrs.push_back(get_cutlass_ptr<ElementC>(C));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note: candidate: ‘template<class CutlassType> CutlassType* get_cutlass_ptr(const at::Tensor&)’
+   22 | CutlassType *get_cutlass_ptr(const torch::Tensor &tensor) {
+      |              ^~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:22:14: note:   template argument deduction/substitution failed:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:123:54: error: template argument 1 is invalid
+  123 |     params.C_ptrs.push_back(get_cutlass_ptr<ElementC>(C));
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:127:3: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+  127 |   grouped_gemm::GroupedGemmResult result;
+      |   ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:130:7: error: ‘result’ was not declared in this scope; did you mean ‘c10::attr::result’?
+  130 |       result = grouped_gemm::run_grouped_gemm_2sm(params);
+      |       ^~~~~~
+      |       c10::attr::result
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/ir/ir.h:18,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/function_impl.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/method.h:7,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/object.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/module.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/input-archive.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/archive.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers/serialize.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers.h:8,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets/chunk.h:6,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/all.h:9,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/extension.h:5,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:5:
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/aten_interned_strings.h:2108:9: note: ‘c10::attr::result’ declared here
+ 2108 | _(attr, result) \
+      |         ^~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:351:35: note: in definition of macro ‘DEFINE_SYMBOL’
+  351 |   namespace ns { constexpr Symbol s(static_cast<unique_t>(_keys::ns##_##s)); }
+      |                                   ^
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:298:3: note: in expansion of macro ‘FORALL_ATTR_BASE_SYMBOLS’
+  298 |   FORALL_ATTR_BASE_SYMBOLS(_)        \
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:352:1: note: in expansion of macro ‘FORALL_NS_SYMBOLS’
+  352 | FORALL_NS_SYMBOLS(DEFINE_SYMBOL)
+      | ^~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:130:16: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+  130 |       result = grouped_gemm::run_grouped_gemm_2sm(params);
+      |                ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:132:7: error: ‘result’ was not declared in this scope; did you mean ‘c10::attr::result’?
+  132 |       result = grouped_gemm::run_grouped_gemm_1sm(params);
+      |       ^~~~~~
+      |       c10::attr::result
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/ir/ir.h:18,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/function_impl.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/method.h:7,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/object.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/module.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/input-archive.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/archive.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers/serialize.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers.h:8,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets/chunk.h:6,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/all.h:9,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/extension.h:5,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:5:
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/aten_interned_strings.h:2108:9: note: ‘c10::attr::result’ declared here
+ 2108 | _(attr, result) \
+      |         ^~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:351:35: note: in definition of macro ‘DEFINE_SYMBOL’
+  351 |   namespace ns { constexpr Symbol s(static_cast<unique_t>(_keys::ns##_##s)); }
+      |                                   ^
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:298:3: note: in expansion of macro ‘FORALL_ATTR_BASE_SYMBOLS’
+  298 |   FORALL_ATTR_BASE_SYMBOLS(_)        \
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:352:1: note: in expansion of macro ‘FORALL_NS_SYMBOLS’
+  352 | FORALL_NS_SYMBOLS(DEFINE_SYMBOL)
+      | ^~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:132:16: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+  132 |       result = grouped_gemm::run_grouped_gemm_1sm(params);
+      |                ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:139:8: error: ‘result’ was not declared in this scope; did you mean ‘c10::attr::result’?
+  139 |   if (!result.success) {
+      |        ^~~~~~
+      |        c10::attr::result
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/ir/ir.h:18,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/function_impl.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/method.h:7,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/object.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/module.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/input-archive.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/archive.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers/serialize.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers.h:8,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets/chunk.h:6,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/all.h:9,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/extension.h:5,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:5:
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/aten_interned_strings.h:2108:9: note: ‘c10::attr::result’ declared here
+ 2108 | _(attr, result) \
+      |         ^~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:351:35: note: in definition of macro ‘DEFINE_SYMBOL’
+  351 |   namespace ns { constexpr Symbol s(static_cast<unique_t>(_keys::ns##_##s)); }
+      |                                   ^
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:298:3: note: in expansion of macro ‘FORALL_ATTR_BASE_SYMBOLS’
+  298 |   FORALL_ATTR_BASE_SYMBOLS(_)        \
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:352:1: note: in expansion of macro ‘FORALL_NS_SYMBOLS’
+  352 | FORALL_NS_SYMBOLS(DEFINE_SYMBOL)
+      | ^~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:145:7: error: ‘result’ was not declared in this scope; did you mean ‘c10::attr::result’?
+  145 |       result.output_ptr, {result.total_elements},
+      |       ^~~~~~
+      |       c10::attr::result
+In file included from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/ir/ir.h:18,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/function_impl.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/method.h:7,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/object.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/jit/api/module.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/input-archive.h:5,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/serialize/archive.h:3,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers/serialize.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/samplers.h:8,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets/chunk.h:6,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data/datasets.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/data.h:4,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include/torch/all.h:9,
+                 from /home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/extension.h:5,
+                 from /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:5:
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/aten_interned_strings.h:2108:9: note: ‘c10::attr::result’ declared here
+ 2108 | _(attr, result) \
+      |         ^~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:351:35: note: in definition of macro ‘DEFINE_SYMBOL’
+  351 |   namespace ns { constexpr Symbol s(static_cast<unique_t>(_keys::ns##_##s)); }
+      |                                   ^
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:298:3: note: in expansion of macro ‘FORALL_ATTR_BASE_SYMBOLS’
+  298 |   FORALL_ATTR_BASE_SYMBOLS(_)        \
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/ATen/core/interned_strings.h:352:1: note: in expansion of macro ‘FORALL_NS_SYMBOLS’
+  352 | FORALL_NS_SYMBOLS(DEFINE_SYMBOL)
+      | ^~~~~~~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp: In lambda function:
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:147:9: error: ‘grouped_gemm’ is not a class, namespace, or enumeration
+  147 |         grouped_gemm::free_output_tensor(static_cast<ElementC *>(ptr));
+      |         ^~~~~~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:147:54: error: ‘ElementC’ does not name a type
+  147 |         grouped_gemm::free_output_tensor(static_cast<ElementC *>(ptr));
+      |                                                      ^~~~~~~~
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:147:63: error: expected ‘>’ before ‘*’ token
+  147 |         grouped_gemm::free_output_tensor(static_cast<ElementC *>(ptr));
+      |                                                               ^
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:147:63: error: expected ‘(’ before ‘*’ token
+  147 |         grouped_gemm::free_output_tensor(static_cast<ElementC *>(ptr));
+      |                                                               ^
+      |                                                               (
+/data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp:147:64: error: expected primary-expression before ‘>’ token
+  147 |         grouped_gemm::free_output_tensor(static_cast<ElementC *>(ptr));
+      |                                                                ^
+ninja: build stopped: subcommand failed.

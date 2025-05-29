@@ -1,0 +1,29 @@
+ninja_required_version = 1.3
+cxx = c++
+
+cflags = -pthread -B /home/less/.conda/envs/pycutlass/compiler_compat -fno-strict-overflow -Wsign-compare -DNDEBUG -O2 -Wall -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -O2 -isystem /home/less/.conda/envs/pycutlass/include -fPIC -I/home/less/local/cutlass40/include -I/home/less/local/cutlass40/tools/util/include -I/home/less/local/cutlass40/examples/common -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include -I/home/less/.conda/envs/pycutlass/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/less/.conda/envs/pycutlass/include/python3.12 -c
+post_cflags = -std=c++17 -O3 -DCUTLASS_ARCH_MMA_SM100_SUPPORTED -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1018"' -DTORCH_EXTENSION_NAME=grouped_gemm_cuda
+cuda_dlink_post_cflags = 
+sycl_dlink_post_cflags = 
+ldflags = 
+
+rule compile
+  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags
+  depfile = $out.d
+  deps = gcc
+
+
+
+
+
+
+
+build /data/users/less/applied-ai/kernels/blackwell/group_gemm/build/temp.linux-x86_64-cpython-312/grouped_gemm_pytorch.o: compile /data/users/less/applied-ai/kernels/blackwell/group_gemm/grouped_gemm_pytorch.cpp
+
+
+
+
+
+
+
+
